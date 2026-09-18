@@ -497,6 +497,48 @@ describe('human-facing pages', () => {
     expect(body).not.toContain('password_hash');
     expect(body).toContain('sessionStorage');
   });
+  it('applies the light visual system to every human page', async () => {
+    for (const path of ['/admin/login', '/admin/users', '/account', '/forgot-password', '/reset-password']) {
+      const body = await (await call(path)).text();
+      expect(body).toContain('color-scheme:light');
+      expect(body).not.toContain('#0b1114');
+    }
+  });
+  it('renders shared navigation, hides admin links by default, and keeps redirects', async () => {
+    const account = await (await call('/account')).text();
+    expect(account).toContain('id="nav-admin"');
+    expect(account).toContain('hidden');
+    expect(account).toContain('id="logout"');
+    expect(account).toContain("location.href='/admin/login'");
+    const users = await (await call('/admin/users')).text();
+    expect(users).toContain("location.href='/account'");
+    const reset = await (await call('/reset-password')).text();
+    expect(reset).toContain('history.replaceState');
+    expect(reset).toContain('autocomplete="new-password"');
+  });
+  it('keeps visible labels and password-manager autocomplete attributes', async () => {
+    const login = await (await call('/admin/login')).text();
+    expect(login).toContain('autocomplete="username"');
+    expect(login).toContain('autocomplete="current-password"');
+    expect(login).toContain('<label for="email">Email</label>');
+    expect(login).toContain('<label for="password">Password</label>');
+  });
+  it('ships a self-contained inline SVG favicon on every human page', async () => {
+    for (const path of ['/admin/login', '/admin/users', '/account', '/forgot-password', '/reset-password']) {
+      const body = await (await call(path)).text();
+      expect(body).toContain('rel="icon"');
+      expect(body).toContain('type="image/svg+xml"');
+      expect(body).toContain('data:image/svg+xml');
+      const href = /href="data:image\/svg\+xml,([^"]+)"/.exec(body)?.[1];
+      expect(href).toBeTruthy();
+      const svg = decodeURIComponent(href!);
+      expect(svg.startsWith('<svg')).toBe(true);
+      expect(svg.endsWith('</svg>')).toBe(true);
+      expect(svg).toContain('xmlns="http://www.w3.org/2000/svg"');
+      expect(svg).toContain('viewBox="0 0 32 32"');
+      expect(svg).not.toContain('<script');
+    }
+  });
   it('redirects /admin to the users page', async () => {
     const response = await call('/admin');
     expect(response.status).toBe(302);

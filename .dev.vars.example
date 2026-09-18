@@ -1,0 +1,4 @@
+# Local entrypoint only. Generate your own: openssl rand -hex 32
+DEV_ADMIN_TOKEN=
+# Optional JSON map, referenced by name from proxy source headers.
+PROXY_SECRETS={}

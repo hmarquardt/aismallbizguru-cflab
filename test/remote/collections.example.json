@@ -1,0 +1,10 @@
+[
+  {
+    "labbox": { "app": "wildlife-field-recorder", "resource": "observations" },
+    "cflab": { "app": "wildlife-field-recorder", "resource": "observations" }
+  },
+  {
+    "labbox": { "app": "wildlife-field-recorder", "resource": "trips" },
+    "cflab": { "app": "wildlife-field-recorder", "resource": "trips" }
+  }
+]

@@ -4,14 +4,16 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-09-18",
   "compatibility_flags": ["nodejs_compat"],
+  "account_id": "b1aa310aa0a1638d72b8b086a21e557c",
   "workers_dev": false,
   "preview_urls": false,
+  "routes": [{ "pattern": "cflab.aismallbizguru.com", "custom_domain": true }],
   "observability": { "enabled": true, "logs": { "invocation_logs": false } },
   "vars": { "PROXY_ALLOWED_HOSTS": "" },
   "d1_databases": [{
     "binding": "DB",
     "database_name": "cflab",
-    "database_id": "00000000-0000-0000-0000-000000000000",
+    "database_id": "cb2d2eb4-2817-4581-8e50-d69212650adf",
     "migrations_dir": "migrations"
   }],
   "r2_buckets": [{ "binding": "FILES", "bucket_name": "cflab-files" }]

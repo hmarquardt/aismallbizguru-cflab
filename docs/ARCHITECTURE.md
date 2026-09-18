@@ -1,5 +1,9 @@
 # Architecture
 
+## Deployment identity
+
+The `cflab` Worker is configured for the exact custom domain `cflab.aismallbizguru.com`, with a separate `cflab` D1 database and private `cflab-files` R2 bucket. This is the independent production-equivalent environment. The existing `lab.aismallbizguru.com` service, DNS, and infrastructure stay unchanged. Local Wrangler uses local bindings without custom-domain routes. Application logic has no deployment hostname; health always identifies `service: "cflab"`, and download URLs are relative. A future approved hostname change can keep the same Worker and data bindings after compatibility work is complete. See [deployment instructions](DEPLOYMENT.md).
+
 ## Request flow
 
 The production entrypoint creates a Hono router with a deny-all admin authorization seam. The local entrypoint supplies a separate loopback/bearer admin check. Production never imports that development check. Hono is the sole runtime dependency: it removes routing/parameter/middleware plumbing without hiding SQL or application logic.

@@ -1,6 +1,6 @@
 # CFLab API
 
-Base URL locally: `http://127.0.0.1:8787`. All responses use `Cache-Control: no-store`. Except health and CORS preflight, app routes require `Authorization: Bearer <app-token>`. Administrative routes use the separate admin boundary described below.
+Base URL locally: `http://127.0.0.1:8787`. Independent deployment target: `https://cflab.aismallbizguru.com`. Choose the base URL in client configuration; paths and relative download URLs do not depend on a hostname. `https://lab.aismallbizguru.com` still serves the separate legacy LabBox contract. All responses use `Cache-Control: no-store`. Except health and CORS preflight, app routes require `Authorization: Bearer <app-token>`. Administrative routes use the separate admin boundary described below.
 
 Slugs are 1–64 lowercase ASCII letters, digits, underscores, or hyphens, beginning with a letter or digit. Generated IDs are lowercase UUID v4. Timestamps are UTC ISO 8601 strings. JSON requests require `Content-Type: application/json` and are capped at 64 KiB. Unknown JSON fields are rejected; arbitrary fields inside `data` and `config` are allowed. App config must contain no secrets.
 

@@ -2,7 +2,9 @@
 
 A small Cloudflare-native backend for static applications that need shared records, files, and approved API proxies. One TypeScript Worker, one D1 database, one private R2 bucket. No server, containers, ORM, or background service.
 
-This is a working local MVP, **not a drop-in LabBox replacement**. The previous repository was inspected; concrete differences and the parallel migration plan are in [MIGRATION.md](docs/MIGRATION.md).
+This is a working local MVP, **not a drop-in LabBox replacement**. The source/client evidence and classified differences are in [COMPATIBILITY.md](docs/COMPATIBILITY.md); the parallel migration plan is in [MIGRATION.md](docs/MIGRATION.md).
+
+The independent deployment target is **https://cflab.aismallbizguru.com**, a lasting production-equivalent environment with its own `cflab` D1 database and private `cflab-files` R2 bucket. **https://lab.aismallbizguru.com continues serving the existing LabBox unchanged.** Consumers can migrate and validate against CFLab before any future hostname cutover.
 
 ## Local development
 
@@ -17,7 +19,7 @@ npm run db:migrate
 npm run dev
 ```
 
-Wrangler listens on `http://127.0.0.1:8787`. D1 and R2 are simulated locally, persist under `.wrangler/state`, and are shared by the two config files because the binding identifiers match. `.dev.vars` is ignored by Git; never put real secrets in the example file. The local admin entrypoint requires the secret, a loopback host, and no browser Origin header. Use a terminal client; there is no admin UI.
+Wrangler listens on `http://127.0.0.1:8787`. D1 and R2 are simulated locally and persist under `.wrangler/state`. Both `dev` and `db:migrate` explicitly use `wrangler.local.jsonc`, so setting the real deployment database ID does not switch local development storage. `.dev.vars` is ignored by Git; never put real secrets in the example file. The local admin entrypoint requires the secret, a loopback host, and no browser Origin header. Use a terminal client; there is no admin UI.
 
 ```sh
 curl http://127.0.0.1:8787/api/health
@@ -45,20 +47,13 @@ npm run build      # bundle only: wrangler deploy --dry-run
 
 Tests apply the real SQL migration to separate ephemeral storage. Only upstream DNS/HTTP are mocked; D1 and R2 behavior is real local binding behavior. Tests do not touch development or production data. The suite includes cross-app writes/deletes, token revocation, preflights, body limits, proxy redirects/timeouts, and R2/D1 compensation. There is no separate linter configured; strict TypeScript catches unused code. Dependencies are exact-pinned with `package-lock.json`.
 
-## Deliberate deployment
+## Independent deployment
 
-Nothing in setup, tests, migrations above, or `build` deploys remotely. The production config has a placeholder database ID, no routes, disabled workers.dev/preview URLs, an empty proxy hostname allowlist, and closed admin routes. Do not deploy `wrangler.local.jsonc` or `src/local.ts`.
+`wrangler.jsonc` targets only the custom domain `cflab.aismallbizguru.com`. Follow [DEPLOYMENT.md](docs/DEPLOYMENT.md) for exact resource creation, account configuration, migrations, publishing, and verification commands. No additional staging config is needed for this parallel production-equivalent environment.
 
-When ready for a **separate staging deployment**:
+Nothing in local setup, `npm run check`, local migrations, or `build` deploys remotely. The D1 ID remains a placeholder; workers.dev/preview URLs remain disabled, the proxy hostname allowlist is empty, and production admin routes remain closed pending verified Cloudflare Access integration. Do not deploy `wrangler.local.jsonc` or `src/local.ts`.
 
-1. Authenticate Wrangler (`npx wrangler login`). Create a new D1 database and private R2 bucket using `npx wrangler d1 create cflab-staging` and `npx wrangler r2 bucket create cflab-staging-files`. Do not reuse LabBox resources.
-2. Make a staging config from `wrangler.jsonc`: set a distinct Worker name, database name/ID, and bucket name. Retain `src/index.ts`. Explicitly configure a staging route/domain or enable workers.dev only for staging. Keep the R2 bucket private; do not enable public bucket access.
-3. Decide how staging will be administered. Production administration is intentionally disabled. Implement verified Cloudflare Access JWT authorization at the seam in `src/index.ts` before enabling admin routes. Validate signature, issuer, audience, expiry, and intended admin identity/policy; do not trust a header merely because it is present. Protect every exposure path, including workers.dev if enabled. No custom passwords are needed.
-4. Set `PROXY_ALLOWED_HOSTS` to exact audited provider hostnames, if proxies are needed. Set `PROXY_SECRETS` using `npx wrangler secret put PROXY_SECRETS --config wrangler.staging.jsonc` (JSON mapping secret names to values). Store only secret references in D1. App config is client-readable and must contain no secrets.
-5. Review the target config, then deliberately run `npx wrangler d1 migrations apply DB --remote --config wrangler.staging.jsonc`, `npx wrangler deploy --dry-run --config wrangler.staging.jsonc`, and finally `npx wrangler deploy --config wrangler.staging.jsonc --no-x-provision`.
-6. Provision staging apps/tokens through the verified admin boundary, smoke-test records/files/proxies, then follow the parallel-run migration checklist. Keep the old LabBox live until acceptance and rollback are established.
-
-No production deployment script or DNS change is included. Before public rollout, choose abuse/rate limits appropriate to the clients, rehearse backup/restore for D1 and R2, and review the proxy trust boundary. No scheduled backups or rate limiter is claimed in this pass.
+GET-only remote comparison is explicit: `npm run test:compat` requires `LABBOX_BASE_URL` and `CFLAB_BASE_URL`. It is excluded from normal tests and CI. See [remote checks](docs/DEPLOYMENT.md#read-only-parallel-checks) for record/collection fixtures, read tokens, optional anonymous/CORS checks, and the separate legacy-health safety gate. Normal checks test the probe harness offline without contacting either deployment.
 
 ## Project map
 

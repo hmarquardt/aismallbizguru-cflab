@@ -4,13 +4,13 @@
 
 The old source is available at `../aismallbizguru-lab`, repository `aismallbizguru-lab`. This pass inspected the working-tree code and recorded HEAD `b0f1bb5f33b9333ad4e2a0add2fb00aed9aa0d92`. No old files, resources, data, or DNS were changed. This is source-level comparison, not proof that the inspected tree matches the deployed version or every current client.
 
-Reviewed: `backend/app/records/{routes,schemas,service}.py`, `auth/{dependencies,tokens}.py`, `files/{routes,schemas}.py`, `proxy/{routes,service,schemas}.py`, `config/models.py`, and `health/routes.py`.
+The source/client audit, pinned revisions, evidence, classifications, and detailed compatibility matrix are in [COMPATIBILITY.md](COMPATIBILITY.md). Confirmed clients are Wildlife Pattern Lab, Wildlife Field Recorder, Top Hat Ferals, and the analytics collector/dashboard. Source usage is not proof that the deployed revisions/configuration match these checkouts. No live checks or production exports have been performed.
 
 ## Compatibility matrix
 
 | Area | Inspected LabBox | CFLab MVP / required work |
 | --- | --- | --- |
-| Health | `/health`, DB and optional storage checks, version/host fields | `/api/health`, liveness only; change monitors |
+| Health | `/api/health` (router mounted at `/api` in `main.py`), DB and optional storage checks, version/host fields | Same path, liveness only with `service: "cflab"`; adapt monitor response checks |
 | Records | `/api/{app_id}/{resource}[/{record_id}]` | `/api/apps/{app}/resources/{resource}/records[/{id}]`; update clients or add tested adapter |
 | Payload | `{data: {...}}`; PATCH replaces supplied data | Same envelope/replacement concept; data required on create, empty PATCH rejected; optional relational status |
 | Lists | `{records, total}`, all records, newest first | Bounded `{records, next_cursor}`, UUID order; clients must paginate and cannot assume chronology |
@@ -20,30 +20,46 @@ Reviewed: `backend/app/records/{routes,schemas,service}.py`, `auth/{dependencies
 | App config | YAML-derived public registry | Authenticated per-app JSON configuration in D1 |
 | Auth | Tokens may span apps; app-level read/write or wildcard; some public reads | One app per token, explicit capability scopes, no public reads; issue new tokens |
 | Token hashes | SHA-256 of opaque random token | SHA-256 but new `cfl_` format/scope semantics; do not blindly import token rows |
-| Files | Multipart attached to a resource/record; `/api/files/{id}` download; soft deletion | Raw app-owned uploads; scoped content URL; physical delete; no native record relationship |
-| Proxy | `/api/proxy/{slug}`; global sources, optional public access, configurable redirects/cache | Per-app authenticated sources, no redirects/cache, strict operator host allowlist |
+| Files | Multipart attached to a resource/record; `/api/files/{id}` download; deletes bytes then tombstones metadata, even on storage failure | Raw app-owned uploads; scoped relative content URL; physical delete; no native record relationship |
+| Proxy | `/api/proxy/{slug}`; global sources, optional public access/redirects; cache and header schema fields not implemented in fetch | Per-app authenticated sources, no redirects/cache, strict operator host allowlist |
 | Admin | Custom cookie/password/session routes/UI | Local CLI administration now; verified Cloudflare Access integration before remote admin |
-| Special features | Wildlife trip aggregation, analytics, workers/jobs, backups | Not ported; inventory active consumers separately |
+| Special features | Wildlife trip aggregation, analytics, workers/jobs, backups | Analytics has confirmed consumers; specialized trip route has no found client caller; operational jobs/backup usage still unknown |
 | Errors | FastAPI `detail` envelopes | `{error:{code,message}}`; update client error handling |
 
 No automatic route aliases are installed. Compatibility-sensitive routing lives in `src/app.ts`; request/response shapes live in `src/routes/records.ts` and `files.ts`; token semantics live in `src/auth/tokens.ts`; proxy policy lives in `src/proxy/`. Add a small explicit compatibility router only after real consumer fixtures identify which translations are required. Do not reproduce any legacy cross-app authorization weaknesses while adapting routes.
 
 ## Parallel-run plan
 
-1. Inventory each live app, routes used, required resource fields, public-read expectations, linked files, token permissions, proxy policies, and app-specific endpoints. Confirm the deployed LabBox revision and capture sanitized API fixtures from clients. Decide whether to update each frontend or supply an adapter.
-2. Create isolated CFLab staging resources and verified Access administration. Establish backup/restore and deletion/retention policy. Rehearse all imports against disposable data.
-3. Export a consistent SQLite snapshot, YAML app config, proxy definitions, and an object inventory from MinIO. Record counts, IDs, timestamps, deletion state, and checksums. Never export plaintext secrets into Git. Translate app/resource identifiers and token scopes explicitly.
-4. Build a repeatable, audited import tool after these mappings are agreed. Preserve valid UUIDs and timestamps when useful; export/import SQL can populate them even though the create API generates them. Separate tombstones from live data. Copy bytes to new R2 keys, verify checksums, then import matching metadata. Map old record/file relationships into an agreed schema or client payload field. No import tool or production migration is claimed in this pass.
-5. Keep LabBox authoritative. Run CFLab alongside it on a different hostname, compare counts, samples, and read behavior, and exercise one pilot app. Avoid blind dual writes; if needed, define an idempotent application-specific synchronization method and reconcile failures.
+1. Use the audited client inventory, then confirm the actual deployed LabBox/client revisions and any additional consumers/automation. Capture sanitized fixtures and real size/count inventories. Prefer small frontend adapters over guessing broad legacy compatibility.
+2. **Milestone A:** publish CFLab independently at `https://cflab.aismallbizguru.com` using its own `cflab` Worker/D1 and `cflab-files` R2 bucket; follow [DEPLOYMENT.md](DEPLOYMENT.md). This is a lasting production-equivalent deployment, not temporary staging. Compatibility gaps do not block its independent existence. Production administration may safely remain closed. Before a pilot, choose verified Access administration or an explicit Cloudflare-account-authenticated operator bootstrap; local admin alone cannot provision remote D1. Never publish the development bypass. Establish recovery/retention ownership before accepting persistent writes. Rehearse imports against separate disposable data.
+3. When separately authorized, export a consistent SQLite snapshot, YAML app config, proxy definitions if used, and an object inventory from MinIO. Record counts, IDs, timestamps, deletion state, relationships, byte sizes, and checksums. **Do not use legacy file metadata `bucket` as the physical source bucket:** `files/service.py` stores the object key's app prefix there, while storage uses configured `MINIO_BUCKET`. Validate actual storage configuration/inventory. Analytics lives in a separate SQLite database and needs its own migration/retirement decision. Never export plaintext secrets into Git. Translate app/resource identifiers and token scopes explicitly, issuing new CFLab tokens rather than importing legacy hashes.
+4. Build a repeatable, audited, dry-run-first import tool after these mappings are agreed. Require explicit verified CFLab targets and source snapshots; never default to modifying or deleting LabBox. Preserve valid UUIDv4 IDs and timestamps; import SQL can populate them even though the create API generates them. Validate nested/local/backend ID references. Separate tombstones from live data; old file tombstones do not guarantee bytes survive. Copy live bytes to new R2 keys, verify checksums, then import matching metadata. Map old record/file relationships into an agreed payload field and preserve visible photo outcomes: legacy wire `photo_url` may be generated, not stored. Report missing/orphan objects rather than silently dropping them. No import/bootstrap tool or production migration is claimed in this pass.
+5. **Milestone B:** keep `https://lab.aismallbizguru.com` and its LabBox infrastructure authoritative and unchanged for unmigrated consumers. Pilot **Wildlife Pattern Lab** first: route adapter, complete collection pagination before replacing IndexedDB, scoped-read diagnostic (CFLab health is not browser-CORS-enabled), exact origin, fresh `records:read` token, and an agreed observation/trip snapshot. Test over 100 rows and partial-page failure without cache loss. A snapshot pilot is not a live synchronized feed; explicitly schedule refresh/delta handling if required while WFR keeps writing to LabBox. Use opt-in GET comparisons of existing records/collections; legacy health needs additional configuration confirmation because it can create a MinIO bucket. Avoid blind dual writes.
 6. Cut over one app only after acceptance. Use a short write freeze/final delta import unless a tested synchronizer exists. Issue new scoped tokens, change that client's base URL, and monitor errors. Keep the old system and export intact during a defined rollback period.
 7. Roll back by restoring the prior client URL/token. Reconcile writes made after cutover before doing so; a DNS switch alone does not undo new data. Retire the VPS only after every consumer, object, backup, and rollback obligation is accounted for.
 
+## Eventual hostname cutover (not authorized or performed here)
+
+Resolve client/API compatibility and data synchronization **during the parallel run**, before changing the old hostname. Clients should keep the API base URL in configuration; CFLab uses relative download URLs and contains no deployment hostname in application logic. Keep the same CFLab Worker, D1 database, R2 bucket, IDs, and tokens when adding a hostname later. Do not create a new backend or move CFLab data solely to change domains.
+
+Once acceptance and a separate cutover decision exist, the remaining work should primarily be routing `lab.aismallbizguru.com` to that existing Worker, updating host-bound Access policies and monitoring, and handling the final data delta. Keep `cflab.aismallbizguru.com` available so migrated clients need not change again. No `lab` route, wildcard, redirect, or DNS change is configured in this repository now.
+
+A routing change **alone is not compatible today**: the audited record/file routes, public reads, tokens, collection reads, and analytics dependencies must be migrated or explicitly retired; a narrowly tested adapter is an option where updating a real consumer isn't practical. Old absolute file URLs, any cookie/domain assumptions, Access audience/policy configuration, frontend allowed origins (not the API hostname), and stale old-backend writes also need review. The remote probes cover CFLab health, optionally safe legacy health, existing-record data, bounded complete collections, optional anonymous reads, and optional GET CORS headers. They do not certify writes, binary files, browser preflight, or deletion compatibility.
+
+**Milestone C** must account for analytics: the audit found 71 Junk Drawer pages plus Top Hat Ferals pointing at `/api/analytics/collect`, and a dashboard using five analytics read endpoints. Moving data clients does not move those tags. Leave them on LabBox during pilots, but do not route the old hostname to a Worker with no collector unless analytics has been deliberately migrated or retired. This does not require building another CFLab production stack.
+
+## Later client migrations
+
+- **WFR:** adapt multipart to raw uploads, normalize MIME codec parameters, preserve explicit record/file references, resolve `download_url` against the API origin, and inventory payload/file sizes against 64 KiB/8 MiB caps. Preserve/remap backend IDs already in IndexedDB before writes; changing its settings currently leaves those IDs intact. Its DELETE code accepts 204 already, but physical deletion/retention and retry behavior require acceptance. Its optional breadcrumb query is not a confirmed working legacy feature; establish actual provider/usage before implementing time filtering.
+- **Top Hat Ferals:** retain deliberately public records/photos through an approved publishing mechanism; never embed privileged tokens or expose private wildlife records. Paginate all lists and sort before deriving summaries. Correct the existing photo-only PATCH: both backends replace data, and old required-field validation currently rejects that partial object. Import attachment relationships/image fallback outcomes, not just stored record JSON. Its “Test Token” button creates a real cat record; never use it for non-destructive verification.
+- **Analytics:** decide on ingestion/dashboard migration or explicit retirement separately from the small data pilot. No new analytics subsystem is introduced by this audit.
+
 ## Outstanding evidence/decisions
 
-- Which old revision is actually deployed, and which clients depend on public reads, newest-first lists, `total`, soft deletion, or generated image URLs?
-- Which resource validations and record/file relationships are essential? Do clients require files larger than 8 MiB or direct `<img>` access (which cannot supply bearer headers)?
+- Which old/client revisions are actually deployed, and are additional callers/automation absent from the searched worktrees? Public reads/direct images and generated photo outcomes are confirmed for Top Hat Ferals; no generic `total` consumer was found. Retention/restore expectations remain an operator decision.
+- What are real payload/object sizes and essential record/file relationships? How should Top Hat public photos be published? Which resource validations should remain frontend-owned?
 - Which global/public proxy sources are active, and do their approved query parameters indirectly request other URLs?
-- Are creator-token attribution, custom wildlife routes, analytics ingestion, or scheduled jobs still used?
+- Are creator-token attribution, custom wildlife routes, or scheduled jobs used outside inspected clients? Analytics ingestion/dashboard usage is confirmed in source, not optional historical baggage.
 - What are current data sizes, object counts/checksums, retention requirements, and acceptable cutover/rollback windows?
 
-These questions govern compatibility work; none prevents using the isolated local MVP.
+These questions govern client migration/cutover, not independent CFLab deployment. The [audit milestone gates](COMPATIBILITY.md#milestone-gates) distinguish them from account/resource prerequisites and remote administration.

@@ -57,9 +57,10 @@ describe('health and administration', () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ status: 'ok', service: 'cflab' });
   });
-  it('does not touch dependencies for health', async () => {
-    const response = await production.fetch(new Request('https://example.com/api/health'), {} as Bindings);
+  it.each(['https://cflab.aismallbizguru.com', 'https://future-api.example'])('health is hostname-independent and dependency-free at %s', async origin => {
+    const response = await production.fetch(new Request(`${origin}/api/health`), {} as Bindings);
     expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ status: 'ok', service: 'cflab' });
   });
   it('production rejects even valid local admin credentials', async () => {
     const response = await production.fetch(new Request('http://localhost/api/admin/apps', { headers: { Authorization: `Bearer ${adminSecret}` } }), testEnv);

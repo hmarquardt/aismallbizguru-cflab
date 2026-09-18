@@ -3,12 +3,18 @@ import type { AppRow, ContextEnv } from './types';
 import { ApiError, slug } from './http';
 import { authenticate } from './auth/tokens';
 import { admin, appOutput } from './routes/admin';
+import { auth, authCors } from './routes/auth';
 import { records } from './routes/records';
 import { files } from './routes/files';
 import { proxy } from './routes/proxy';
+import { accountPage, forgotPage, loginPage, resetPage, usersPage } from './ui';
 
 const methods = ['GET', 'POST', 'PATCH', 'DELETE'];
 const allowedHeaders = ['authorization', 'content-type', 'x-filename'];
+const csp = "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
+function html(body: string): Response {
+  return new Response(body, { headers: { 'Content-Type': 'text/html; charset=utf-8', 'Content-Security-Policy': csp } });
+}
 
 export function createApp(adminAuth: MiddlewareHandler<ContextEnv>) {
   const app = new Hono<ContextEnv>({ strict: false });
@@ -32,8 +38,16 @@ export function createApp(adminAuth: MiddlewareHandler<ContextEnv>) {
   });
   app.notFound(c => c.json({ error: { code: 'not_found', message: 'Route not found' } }, 404));
   app.get('/api/health', c => c.json({ status: 'ok', service: 'cflab' }));
+  app.use('/api/auth/*', authCors);
+  app.route('/api/auth', auth);
   app.use('/api/admin/*', adminAuth);
   app.route('/api/admin', admin);
+  app.get('/admin', c => c.redirect('/admin/users'));
+  app.get('/admin/login', () => html(loginPage()));
+  app.get('/admin/users', () => html(usersPage()));
+  app.get('/account', () => html(accountPage()));
+  app.get('/forgot-password', () => html(forgotPage()));
+  app.get('/reset-password', () => html(resetPage()));
   app.use('/api/apps/:app/*', async (c, next) => {
     const row = await c.env.DB.prepare('SELECT * FROM apps WHERE id = ? AND active = 1').bind(slug(c.req.param('app'))).first<AppRow>();
     if (!row) throw new ApiError(404, 'app_not_found', 'App not found');

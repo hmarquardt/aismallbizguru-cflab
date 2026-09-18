@@ -9,7 +9,19 @@
   "preview_urls": false,
   "routes": [{ "pattern": "cflab.aismallbizguru.com", "custom_domain": true }],
   "observability": { "enabled": true, "logs": { "invocation_logs": false } },
-  "vars": { "PROXY_ALLOWED_HOSTS": "" },
+  "vars": {
+    "PROXY_ALLOWED_HOSTS": "",
+    "AUTH_FROM_EMAIL": "",
+    "AUTH_PUBLIC_BASE_URL": "https://cflab.aismallbizguru.com",
+    "AUTH_SESSION_TTL_SECONDS": "604800",
+    "AUTH_RESET_TTL_SECONDS": "1800"
+  },
+  "send_email": [{ "name": "EMAIL" }],
+  "ratelimits": [
+    { "name": "RL_LOGIN", "namespace_id": "4101", "simple": { "limit": 10, "period": 60 } },
+    { "name": "RL_RECOVERY", "namespace_id": "4102", "simple": { "limit": 5, "period": 60 } },
+    { "name": "RL_RESET", "namespace_id": "4103", "simple": { "limit": 10, "period": 60 } }
+  ],
   "d1_databases": [{
     "binding": "DB",
     "database_name": "cflab",

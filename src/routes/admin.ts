@@ -3,6 +3,7 @@ import type { AppRow, ContextEnv } from '../types';
 import { ApiError, boolean, fields, id, invalid, jsonBody, object, slug, string, strings } from '../http';
 import { hashToken, newToken, scopes } from '../auth/tokens';
 import { sourceInput } from '../proxy/policy';
+import { adminUsers } from './admin-users';
 
 export function appOutput(row: AppRow) {
   const { config_json, ...rest } = row;
@@ -18,6 +19,7 @@ function origins(value: unknown): string[] {
   });
 }
 export const admin = new Hono<ContextEnv>();
+admin.route('/users', adminUsers);
 admin.get('/apps', async c => {
   const after = c.req.query('after') ?? '';
   if (after) slug(after);

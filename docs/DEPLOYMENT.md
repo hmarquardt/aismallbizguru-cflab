@@ -56,8 +56,9 @@ For later deployments, reuse these exact CFLab resources instead of recreating t
 - Retain `src/index.ts`, `workers_dev: false`, and `preview_urls: false`. Never deploy the local entrypoint or upload `DEV_ADMIN_TOKEN`.
 - Retain only the exact `cflab.aismallbizguru.com` Custom Domain; no `lab` hostname or wildcard.
 - Leave proxies disabled unless needed. For audited upstreams, set exact `PROXY_ALLOWED_HOSTS`; review the [proxy threat model](ARCHITECTURE.md#proxy-threat-model). Put credentials in `PROXY_SECRETS`, not app config or source headers.
-- Production administration currently fails closed. The Worker can be published and health-checked in that state. Before provisioning apps/tokens through the API, implement verified Cloudflare Access JWT authentication at `src/index.ts`, with the correct issuer, audience, signature, expiry, and admin policy. Configure Access for the new hostname's `/api/admin/*` boundary only unless a broader policy is intentionally required. Do not protect all machine-client routes accidentally. Do not enable the local admin bypass remotely.
-- Access is not required merely to publish the machine API. An initial pilot can instead use a separately approved, narrowly scoped operator bootstrap through Cloudflare account-authenticated tooling, targeting only the verified CFLab DB and storing token hashes, never plaintext tokens. Section 5 documents the exact procedure; no bootstrap code or remote admin endpoint is added. Local administration only changes local D1; it does not provision deployed apps. See [pilot prerequisites](COMPATIBILITY.md#b--first-pilot-wildlife-pattern-lab-read-only).
+- Production administration is a normal human session whose user is an active administrator; there is no shared admin secret and no development bypass. The Worker can be published and health-checked before any user exists. Create the first administrator through the documented operator bootstrap in [AUTH.md](AUTH.md#first-admin-bootstrap), then manage users, memberships, and sessions through `/api/admin/*` or the minimal UI at `/admin/login`.
+- Authentication mail uses the native `send_email` binding (`EMAIL`) with `AUTH_FROM_EMAIL` and `AUTH_PUBLIC_BASE_URL`. `AUTH_FROM_EMAIL` is intentionally empty until a sending domain is onboarded in **Compute > Email Service > Email Sending > Onboard Domain**; review the bounce MX/SPF/DKIM/DMARC records that Cloudflare proposes before applying them and do not disturb existing Email Routing or the current registrar MX/SPF records. Until then, forgot-password stays generic and admin setup mail returns `503 email_unavailable`; the operator bootstrap can use a directly inserted reset token instead. Rate-limit bindings `RL_LOGIN`, `RL_RECOVERY`, and `RL_RESET` are configured in `wrangler.jsonc`.
+- The human auth system is the primary CFLab identity provider. Cloudflare Access is not required and is not part of this deployment. An initial pilot app can be provisioned through the authenticated admin API/UI, or through the narrowly scoped operator procedure in Section 5 targeting only the verified CFLab DB and storing token hashes, never plaintext tokens. Local administration only changes local D1; it does not provision deployed apps. See [pilot prerequisites](COMPATIBILITY.md#b--first-pilot-wildlife-pattern-lab-read-only).
 - Set operational ownership, abuse limits, and backup/restore policy appropriate for persistent client data. This is not disposable staging; the current MVP has no automated backup or per-client rate-limit service.
 
 If upstream secrets are required, after the initial Worker publication below and before enabling its proxy sources:
@@ -88,11 +89,22 @@ After DNS/certificate activation:
 curl --fail --silent --show-error https://cflab.aismallbizguru.com/api/health
 ```
 
-Require exactly the CFLab identity (`service: "cflab"`), not just HTTP 200. Provision and validate consumers once a secure app/token setup process is ready (verified Access API or the approved operator alternative above). Use the [parallel migration plan](MIGRATION.md) before moving any existing data or consumers.
+Require exactly the CFLab identity (`service: "cflab"`), not just HTTP 200. Then verify non-destructively that human auth exists and fails closed:
 
-## 5. Operator bootstrap without Access (pilot stage)
+```sh
+curl --silent --show-error -o /dev/null -w '%{http_code}\n' https://cflab.aismallbizguru.com/api/auth/me
+# expect 401
+curl --silent --show-error -o /dev/null -w '%{http_code}\n' https://cflab.aismallbizguru.com/api/admin/users
+# expect 401
+curl --silent --show-error https://cflab.aismallbizguru.com/admin/login | head -c 200
+# expect the login page, never a credential
+```
 
-Production administration deliberately stays closed: `src/index.ts` always returns `admin_disabled`. Until verified Cloudflare Access administration exists, an operator authenticated to the CFLab Cloudflare account can provision the first pilot app by writing directly to the verified CFLab D1 database. This is manual, account-gated tooling, not a remote admin endpoint or an authentication bypass. Never deploy `src/local.ts`, never set `DEV_ADMIN_TOKEN`, and never point these commands at anything but the verified `cflab` database.
+Provision and validate consumers once the first administrator exists and the desired app/token setup process is ready. Use the [parallel migration plan](MIGRATION.md) before moving any existing data or consumers.
+
+## 5. Operator bootstrap for the pilot app
+
+Production administration uses human admin sessions (see [AUTH.md](AUTH.md)); the first administrator is created by operator bootstrap there. This section covers provisioning a pilot application and machine token when an operator prefers direct, Cloudflare-account-gated D1 access over the admin API. This is manual tooling, not a remote admin endpoint or an authentication bypass. Never deploy `src/local.ts`, never set `DEV_ADMIN_TOKEN`, and never point these commands at anything but the verified `cflab` database.
 
 Generate a token locally and keep the plaintext only in your secret manager; D1 stores the SHA-256 hash, exactly as the admin routes do:
 

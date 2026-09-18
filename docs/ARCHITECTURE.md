@@ -6,9 +6,9 @@ The `cflab` Worker is configured for the exact custom domain `cflab.aismallbizgu
 
 ## Request flow
 
-The production entrypoint creates a Hono router with a deny-all admin authorization seam. The local entrypoint supplies a separate loopback/bearer admin check. Production never imports that development check. Hono is the sole runtime dependency: it removes routing/parameter/middleware plumbing without hiding SQL or application logic.
+The production entrypoint authenticates `/api/admin/*` with a human session whose user is an active administrator. The local entrypoint additionally accepts a loopback `DEV_ADMIN_TOKEN`; production never imports that development check. Hono is the sole runtime dependency: it removes routing/parameter/middleware plumbing without hiding SQL or application logic.
 
-App requests load an active app, check the exact Origin against `app_origins`, handle preflight, hash and validate the app bearer token, enforce the route scope, validate input, and execute bound SQL or a binding operation. Every record/file lookup and mutation includes its owning app, and records also include resource. Errors have one JSON envelope. Health returns liveness without binding calls.
+App requests load an active app, check the exact Origin against `app_origins`, handle preflight, authenticate either a machine app token or a human session, enforce the route scope, validate input, and execute bound SQL or a binding operation. Every record/file lookup and mutation includes its owning app, and records also include resource. Errors have one JSON envelope. Health returns liveness without binding calls.
 
 Structured logs contain only event name, method, status, and duration. Unexpected failures log a generic event without SQL, URLs, headers, or payloads. Wrangler invocation logs are disabled in the production config to avoid automatic full-URL logging. A future Analytics Engine write belongs in a small optional reporting function after request handling; there is no event table or analytics request path today.
 
@@ -20,6 +20,10 @@ Structured logs contain only event name, method, status, and duration. Unexpecte
 - `records`: `(app_id, resource, id)` primary key for both object access and keyset lists. `(app_id, resource, status, id)` serves optional exact status filtering. Payload is a JSON object with a SQLite validity/type constraint. No speculative JSON-field indexes.
 - `files`: `(app_id, id)` serves listing and access; unique object key protects storage identity. App foreign key prevents accidentally deleting an app while its file metadata remains.
 - `proxy_sources`: `(app_id, slug)` for lookup; constrained JSON policy, active state, timestamps.
+- `users`: unique normalized email, nullable password hash, active/admin flags, timestamps. No plaintext or reset metadata.
+- `project_memberships`: `(user_id, app_id)` primary key with `read`/`write`; `(app_id, user_id)` supports per-project lookups. Cascades with users and apps.
+- `sessions`: unique SHA-256 token hash, expiry, last-seen, revocation; `(user_id, id)` and expiry indexes.
+- `password_reset_tokens`: unique SHA-256 token hash, expiry, used timestamp; `(user_id, id)` and expiry indexes. Expired rows are ignored by queries and can be removed by operator maintenance.
 
 Resources are implicit namespaces. A resource catalog adds no useful behavior until schemas or policies need enforcement. Configuration JSON is intentionally small; JSON requests are limited to 64 KiB. Only `limit`, `after`, and optional exact `status` are record query parameters. Limits are 1–100 (default 50). UUID ordering is stable but **not chronological**. Lists return one extra row internally to determine `next_cursor`, avoiding counts and offsets. Concurrent inserts earlier than a cursor are seen on the next full traversal; pagination is not a snapshot.
 
@@ -35,13 +39,15 @@ D1 and R2 do not share a transaction. Upload writes bytes first and deletes them
 
 ## Authentication and CORS
 
-Tokens contain 256 random bits, prefixed `cfl_`, and are SHA-256 hashed. Fast hashing is appropriate for randomly generated high-entropy secrets; it is not password hashing. Each token belongs to exactly one app, has explicitly enumerated scopes, and is returned only on creation. An identifier and short prefix support listing/revocation. Tokens do not expire automatically in v1; rotate by creating a replacement, switching the client, and revoking the old one.
+Machine API tokens contain 256 random bits, prefixed `cfl_`, and are SHA-256 hashed. Fast hashing is appropriate for randomly generated high-entropy secrets; it is not password hashing. Each token belongs to exactly one app, has explicitly enumerated scopes, and is returned only on creation. An identifier and short prefix support listing/revocation. Tokens do not expire automatically in v1; rotate by creating a replacement, switching the client, and revoking the old one.
 
-Scopes are app-wide: `records:read`, `records:write`, `files:read`, `files:write`, `proxy:use`. Write does not imply read. No wildcard, anonymous data access, implicit empty-scope privilege, OAuth, or user identity is implemented. Any valid app token can read that app's public configuration.
+Human users authenticate with email and password. Passwords use standard scrypt (`N=8192`, `r=8`, `p=10`, unique 16-byte salt, 256-bit key, 32 MiB maxmem) through the native `node:crypto` binding, because Workers caps a single PBKDF2 call at 100,000 iterations, below OWASP guidance; parameters are stored alongside the hash. Sessions use `cflu_` tokens stored only as SHA-256 hashes with a configurable absolute lifetime. Human authorization is separate from machine scopes: administrators get every app, project users get only assigned apps at `read` or `write`. Full details, including reset tokens and the first-admin bootstrap, are in [AUTH.md](AUTH.md).
 
-The production admin seam is closed until a verified Access integration is implemented. The local entrypoint requires a random secret of at least 32 characters, a loopback hostname, and no Origin header. Bind Wrangler to loopback; do not tunnel or deploy the local entrypoint. App bearer tokens cannot administer the service.
+Scopes are app-wide: `records:read`, `records:write`, `files:read`, `files:write`, `proxy:use`. Write does not imply read. No wildcard, anonymous data access, implicit empty-scope privilege, OAuth, or social login is implemented. Any valid app token can read that app's public configuration.
 
-CORS echoes a single exact configured origin, never `*`. Only loopback origins may use HTTP. Allowed preflights need no bearer token but must match app origin, method, and permitted headers. Errors for allowed origins retain CORS headers. Requests without Origin remain valid for machine clients, so CORS is not an authorization boundary. Cookies and credentialed browser sessions are not used.
+The local entrypoint requires a random secret of at least 32 characters, a loopback hostname, and no Origin header; human admin sessions also work there. Bind Wrangler to loopback; do not tunnel or deploy the local entrypoint. App bearer tokens cannot administer the service.
+
+CORS echoes a single exact configured origin, never `*`. Only loopback origins may use HTTP. Allowed preflights need no bearer token but must match app origin, method, and permitted headers. Errors for allowed origins retain CORS headers. `/api/auth/*` accepts only the same origin or origins already registered for active apps; it is browser hygiene, and membership checks still decide data access. Requests without Origin remain valid for machine clients, so CORS is not an authorization boundary. Auth responses use bearer credentials, not cookies; the admin UI keeps its session in `sessionStorage` and never in URLs.
 
 ## Proxy threat model
 
@@ -57,4 +63,4 @@ Fetch uses `redirect: manual`; every redirect is rejected, even to an otherwise 
 
 ## Services intentionally absent
 
-No Durable Objects: there is no per-entity coordination or live session requirement. No Queues or Workflows: requests are small and synchronous. No Analytics Engine yet: operational logs suffice. No DuckDB, Iceberg, or R2 Data Catalog: there is no current archival query workload. R2 and a small reporting seam leave room for these later without adding them to ordinary requests. No ORM, schema framework, custom login, scheduler, or VPS remains.
+No Durable Objects: there is no per-entity coordination or live session requirement. No Queues or Workflows: requests are small and synchronous. No Analytics Engine yet: operational logs suffice. No DuckDB, Iceberg, or R2 Data Catalog: there is no current archival query workload. R2 and a small reporting seam leave room for these later without adding them to ordinary requests. No ORM, schema framework, third-party identity provider, MFA, scheduler, or VPS. Authentication mail uses the native `send_email` binding, and rate limiting uses native rate-limit bindings, rather than external services.

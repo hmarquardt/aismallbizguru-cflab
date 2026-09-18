@@ -1,6 +1,6 @@
 # CFLab API
 
-Base URL locally: `http://127.0.0.1:8787`. Independent deployment target: `https://cflab.aismallbizguru.com`. Choose the base URL in client configuration; paths and relative download URLs do not depend on a hostname. `https://lab.aismallbizguru.com` still serves the separate legacy LabBox contract. All responses use `Cache-Control: no-store`. Except health and CORS preflight, app routes require `Authorization: Bearer <app-token>`. Administrative routes use the separate admin boundary described below.
+Base URL locally: `http://127.0.0.1:8787`. Independent deployment target: `https://cflab.aismallbizguru.com`. Choose the base URL in client configuration; paths and relative download URLs do not depend on a hostname. `https://lab.aismallbizguru.com` still serves the separate legacy LabBox contract. All responses use `Cache-Control: no-store`. Except health, authentication endpoints, and CORS preflight, app routes require `Authorization: Bearer <app-token or human-session>`. Administrative routes require an administrator's human session (or the loopback development secret described below).
 
 Slugs are 1–64 lowercase ASCII letters, digits, underscores, or hyphens, beginning with a letter or digit. Generated IDs are lowercase UUID v4. Timestamps are UTC ISO 8601 strings. JSON requests require `Content-Type: application/json` and are capped at 64 KiB. Unknown JSON fields are rejected; arbitrary fields inside `data` and `config` are allowed. App config must contain no secrets.
 
@@ -10,7 +10,7 @@ Errors always have this form:
 {"error":{"code":"record_not_found","message":"Record not found"}}
 ```
 
-Common statuses: 400 invalid input, 401 missing/invalid/revoked/wrong-app bearer, 403 insufficient scope/origin/admin denial, 404 missing resource or route, 409 duplicate app, 413 body limit, 415 wrong JSON media type, 500 sanitized internal error, 502 upstream failure/policy violation, 503 missing file bytes/proxy secret, 504 upstream deadline. Successful DELETE returns 204 with no body. An inactive app appears unavailable (404).
+Common statuses: 400 invalid input, 401 missing/invalid/revoked/expired bearer or bad credentials, 403 insufficient scope/origin/membership/admin denial, 404 missing resource or route, 409 duplicate app/email or last-admin protection, 413 body limit, 415 wrong JSON media type, 429 rate limited, 500 sanitized internal error, 502 upstream failure/policy violation, 503 missing file bytes/proxy secret/email delivery, 504 upstream deadline. Successful DELETE returns 204 with no body. An inactive app appears unavailable (404).
 
 ## Health
 
@@ -21,6 +21,29 @@ Common statuses: 400 invalid input, 401 missing/invalid/revoked/wrong-app bearer
 ```
 
 This is liveness only, not a database/storage readiness check.
+
+## Human authentication
+
+Human credentials are separate from machine app tokens. A human session token starts with `cflu_`, is returned only by login, and works as `Authorization: Bearer` on app routes. Full lifecycle details are in [AUTH.md](AUTH.md).
+
+| Method/path | Auth | Behavior |
+| --- | --- | --- |
+| POST `/api/auth/login` | none | `{email,password}` → 200 `{token,token_type,expires_at,user,memberships}` |
+| POST `/api/auth/logout` | session (optional) | Revokes the presented session; always 204, idempotent |
+| GET `/api/auth/me` | session | Safe profile, `created_at`, `last_login_at`, memberships |
+| POST `/api/auth/change-password` | session | `{current_password,new_password}` → 200; revokes all sessions |
+| POST `/api/auth/forgot-password` | none | `{email}` → always the same generic 200 response |
+| POST `/api/auth/reset-password` | none | `{token,password}` → 200; single-use token, revokes all sessions |
+
+```sh
+curl http://127.0.0.1:8787/api/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"user@example.com","password":"a long pass phrase"}'
+```
+
+Login returns 401 `invalid_credentials` without distinguishing nonexistent, inactive, passwordless, or wrong-password accounts. `forgot-password` never reveals whether an account exists or whether mail was delivered. Passwords are 15–128 characters with no composition rules. Reset tokens expire after 30 minutes by default and are invalidated when a newer one is issued. Successful reset or change requires a fresh login.
+
+`/api/auth/*` accepts browser requests only from the same origin or origins already registered for active apps, and never returns `Access-Control-Allow-Origin: *`. Rate limiting applies to login (10/min), forgot-password (5/min), and reset-password (10/min) per hashed account/token key; rejections return 429.
 
 ## App data
 
@@ -131,7 +154,7 @@ Response is the approved upstream content with HTTP 200 (no JSON wrapper). Inval
 
 ## Administration
 
-The following routes are functional through the **local entrypoint** with `Authorization: Bearer <DEV_ADMIN_TOKEN>`, a loopback host, and no Origin header. Production returns `admin_disabled` until verified Cloudflare Access authentication is implemented. App tokens cannot use these routes. All JSON responses, including initial token creation, are `no-store`.
+Administration requires an active human session whose user has `is_admin = true` (`Authorization: Bearer <cflu_...>`). The **local entrypoint** additionally accepts `Authorization: Bearer <DEV_ADMIN_TOKEN>` on a loopback host with no Origin header. Machine app tokens can never use these routes. All JSON responses, including initial token creation, are `no-store`. The first administrator is created by operator bootstrap, not by an API ([AUTH.md](AUTH.md#first-admin-bootstrap)).
 
 | Method/path under `/api/admin` | Body / response |
 | --- | --- |
@@ -146,6 +169,22 @@ The following routes are functional through the **local entrypoint** with `Autho
 | GET `/apps/:app/proxy-sources` | `{sources:[...],next_cursor}`; optional `after` slug, 100 per page |
 
 App IDs cannot be renamed. Inactive apps can still be administered. `origins` and `config` are replaced as whole values when supplied; omitted fields are unchanged. Maximum 32 origins, exact serialized HTTP(S) origins without trailing slash/path. HTTP is allowed only for loopback. No app deletion is provided.
+
+### Users and memberships
+
+| Method/path under `/api/admin` | Body / response |
+| --- | --- |
+| GET `/users` | `{users:[...],next_cursor}`; optional `after` UUID, 100 per page; includes memberships, never hashes |
+| POST `/users` | `{email,is_admin?}` → 201 user with no usable password; 409 on duplicate email |
+| GET `/users/:id` | User plus memberships |
+| PATCH `/users/:id` | Any of `{active,is_admin}`; deactivation revokes sessions; last active admin returns 409 |
+| GET `/users/:id/memberships` | `{memberships:[{app_id,access}]}` |
+| POST `/users/:id/memberships` | `{app_id,access}` where access is `read` or `write`; idempotent upsert; 404 unknown app/user |
+| DELETE `/users/:id/memberships/:appId` | Remove; 204, or 404 when absent |
+| POST `/users/:id/revoke-sessions` | Revoke every session for the user; `{revoked}` |
+| POST `/users/:id/send-password-setup` | Email a single-use setup link; `{ok,expires_at}`; 503 when mail is unavailable |
+
+User responses include `id`, `email`, `active`, `is_admin`, `has_password`, timestamps, and memberships. Password hashes, reset tokens, and session tokens are never returned or listed. New users have no usable password until they complete the emailed setup link (or an operator provisions one through [AUTH.md](AUTH.md#first-admin-bootstrap)). Deactivating a user immediately blocks login and invalidates existing sessions. The last active administrator cannot be demoted or deactivated.
 
 Token scopes must be a nonempty list drawn from `records:read`, `records:write`, `files:read`, `files:write`, `proxy:use`. Name is required, maximum 128 characters. Creation response contains `id`, `name`, `prefix`, `scopes`, `token`, `created_at`. List responses include `revoked_at` but never token plaintext or hashes. Tokens do not expire automatically.
 

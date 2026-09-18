@@ -64,12 +64,12 @@ describe('health and administration', () => {
   });
   it('production rejects even valid local admin credentials', async () => {
     const response = await production.fetch(new Request('http://localhost/api/admin/apps', { headers: { Authorization: `Bearer ${adminSecret}` } }), testEnv);
-    expect(response.status).toBe(403);
+    expect(response.status).toBe(401);
   });
   it('rejects browser-origin and non-loopback local admin requests', async () => {
-    expect((await call('/api/admin/apps', 'GET', undefined, adminSecret, { Origin: 'https://client.example' })).status).toBe(403);
-    expect((await local.fetch(new Request('https://evil.example/api/admin/apps', { headers: { Authorization: `Bearer ${adminSecret}` } }), testEnv)).status).toBe(403);
-    expect((await call('/api/admin/apps', 'GET', undefined, null)).status).toBe(403);
+    expect((await call('/api/admin/apps', 'GET', undefined, adminSecret, { Origin: 'https://client.example' })).status).toBe(401);
+    expect((await local.fetch(new Request('https://evil.example/api/admin/apps', { headers: { Authorization: `Bearer ${adminSecret}` } }), testEnv)).status).toBe(401);
+    expect((await call('/api/admin/apps', 'GET', undefined, null)).status).toBe(401);
   });
   it('reads and updates apps including origins and inactivity', async () => {
     expect((await admin('/apps/demo')).status).toBe(200);

@@ -1,6 +1,10 @@
 import type { MiddlewareHandler } from 'hono';
 import type { ContextEnv, Scope } from '../types';
 import { ApiError, invalid, strings } from '../http';
+import { hashToken, randomHex } from './crypto';
+import { HUMAN_TOKEN_PATTERN, appScopesFor, sessionUser } from './human';
+
+export { hashToken } from './crypto';
 
 export const SCOPES: Scope[] = ['records:read', 'records:write', 'files:read', 'files:write', 'proxy:use'];
 export function scopes(value: unknown): Scope[] {
@@ -8,15 +12,23 @@ export function scopes(value: unknown): Scope[] {
   if (!values.length || values.some(v => !SCOPES.includes(v as Scope))) invalid('Invalid scopes');
   return values as Scope[];
 }
-export async function hashToken(token: string): Promise<string> {
-  const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token));
-  return Array.from(new Uint8Array(bytes), b => b.toString(16).padStart(2, '0')).join('');
-}
 export function newToken(): string {
-  return 'cfl_' + Array.from(crypto.getRandomValues(new Uint8Array(32)), b => b.toString(16).padStart(2, '0')).join('');
+  return 'cfl_' + randomHex(32);
 }
+// Application routes accept either a machine API token or a human session.
+// Machine scopes stay exactly as issued; human scopes derive from admin status or project membership.
 export const authenticate: MiddlewareHandler<ContextEnv> = async (c, next) => {
-  const match = /^Bearer (cfl_[0-9a-f]{64})$/i.exec(c.req.header('Authorization') ?? '');
+  const header = c.req.header('Authorization') ?? '';
+  const human = /^Bearer\s+(\S+)$/i.exec(header)?.[1];
+  if (human && HUMAN_TOKEN_PATTERN.test(human)) {
+    const user = await sessionUser(c.env, human);
+    const effective = await appScopesFor(c.env, user, c.get('app').id);
+    c.set('user', user);
+    c.set('scopes', effective);
+    await next();
+    return;
+  }
+  const match = /^Bearer (cfl_[0-9a-f]{64})$/i.exec(header);
   if (!match?.[1]) throw new ApiError(401, 'unauthorized', 'Invalid or missing bearer token');
   const token = await c.env.DB.prepare('SELECT scopes_json FROM api_tokens WHERE app_id = ? AND token_hash = ? AND revoked_at IS NULL')
     .bind(c.get('app').id, await hashToken(match[1])).first<{ scopes_json: string }>();

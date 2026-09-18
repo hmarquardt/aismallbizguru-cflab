@@ -1,6 +1,6 @@
 # CFLab
 
-A small Cloudflare-native backend for static applications that need shared records, files, and approved API proxies. One TypeScript Worker, one D1 database, one private R2 bucket. No server, containers, ORM, or background service.
+A small Cloudflare-native backend for static applications that need shared records, files, and approved API proxies. One TypeScript Worker, one D1 database, one private R2 bucket. No server, containers, ORM, or background service. Machine API tokens remain app-scoped service credentials; a separate human authentication system adds email/password users, sessions, and project memberships. See [AUTH.md](docs/AUTH.md).
 
 This is a working local MVP, **not a drop-in LabBox replacement**. The source/client evidence and classified differences are in [COMPATIBILITY.md](docs/COMPATIBILITY.md); the parallel migration plan is in [MIGRATION.md](docs/MIGRATION.md).
 
@@ -19,7 +19,7 @@ npm run db:migrate
 npm run dev
 ```
 
-Wrangler listens on `http://127.0.0.1:8787`. D1 and R2 are simulated locally and persist under `.wrangler/state`. Both `dev` and `db:migrate` explicitly use `wrangler.local.jsonc`, so setting the real deployment database ID does not switch local development storage. `.dev.vars` is ignored by Git; never put real secrets in the example file. The local admin entrypoint requires the secret, a loopback host, and no browser Origin header. Use a terminal client; there is no admin UI.
+Wrangler listens on `http://127.0.0.1:8787`. D1 and R2 are simulated locally and persist under `.wrangler/state`. Both `dev` and `db:migrate` explicitly use `wrangler.local.jsonc`, so setting the real deployment database ID does not switch local development storage. `.dev.vars` is ignored by Git; never put real secrets in the example file. The local admin entrypoint requires the secret, a loopback host, and no browser Origin header; human admin sessions also work there. Minimal account pages are served at `/admin/login`, `/admin/users`, `/account`, `/forgot-password`, and `/reset-password`. Local auth mail is simulated by the `send_email` binding; no real email is sent.
 
 ```sh
 curl http://127.0.0.1:8787/api/health
@@ -34,7 +34,7 @@ curl http://127.0.0.1:8787/api/admin/apps/demo/tokens \
   -d '{"name":"demo-client","scopes":["records:read","records:write","files:read","files:write","proxy:use"]}'
 ```
 
-Save the returned app token; this is its only plaintext appearance. See [API.md](docs/API.md) for record, file, proxy, and administration examples. App bearer tokens are capabilities: anyone who obtains one has its app-wide scopes. Do not embed privileged tokens in a publicly distributed frontend or commit them. This MVP does not provide user accounts or per-user record ownership. CORS does not make a browser token secret.
+Save the returned app token; this is its only plaintext appearance. See [API.md](docs/API.md) for record, file, proxy, authentication, and administration examples. App bearer tokens are capabilities: anyone who obtains one has its app-wide scopes. Do not embed privileged tokens in a publicly distributed frontend or commit them. Human users log in at `/admin/login`; human sessions are also bearer credentials and are revocable. CORS does not make a browser credential secret.
 
 ## Verification
 
@@ -51,12 +51,12 @@ Tests apply the real SQL migration to separate ephemeral storage. Only upstream 
 
 `wrangler.jsonc` targets only the custom domain `cflab.aismallbizguru.com`. Follow [DEPLOYMENT.md](docs/DEPLOYMENT.md) for exact resource creation, account configuration, migrations, publishing, and verification commands. No additional staging config is needed for this parallel production-equivalent environment.
 
-Nothing in local setup, `npm run check`, local migrations, or `build` deploys remotely. The D1 ID remains a placeholder; workers.dev/preview URLs remain disabled, the proxy hostname allowlist is empty, and production admin routes remain closed pending verified Cloudflare Access integration. Do not deploy `wrangler.local.jsonc` or `src/local.ts`.
+Nothing in local setup, `npm run check`, local migrations, or `build` deploys remotely. The D1 ID remains a placeholder; workers.dev/preview URLs remain disabled, the proxy hostname allowlist is empty, and production administration requires a human admin session. `AUTH_FROM_EMAIL` stays empty until a sending domain is deliberately onboarded, so authentication mail is not operational yet. Do not deploy `wrangler.local.jsonc` or `src/local.ts`.
 
 GET-only remote comparison is explicit: `npm run test:compat` requires `LABBOX_BASE_URL` and `CFLAB_BASE_URL`. It is excluded from normal tests and CI. See [remote checks](docs/DEPLOYMENT.md#read-only-parallel-checks) for record/collection fixtures, read tokens, optional anonymous/CORS checks, and the separate legacy-health safety gate. Normal checks test the probe harness offline without contacting either deployment.
 
 ## Project map
 
-`src/app.ts` composes routing, errors, logging, CORS, and app authentication. `src/routes/` holds straightforward SQL-backed handlers. `src/auth/` holds token handling. `src/proxy/` contains URL/DNS policy. `migrations/` owns the D1 schema. `test/` exercises behavior. [ARCHITECTURE.md](docs/ARCHITECTURE.md) explains the boundaries and intentional limitations.
+`src/app.ts` composes routing, errors, logging, CORS, and app authentication. `src/routes/` holds straightforward SQL-backed handlers. `src/auth/` holds machine tokens, human sessions, password hashing, mail, and rate-limit helpers. `src/ui.ts` holds the small server-rendered account pages. `src/proxy/` contains URL/DNS policy. `migrations/` owns the D1 schema. `test/` exercises behavior. [ARCHITECTURE.md](docs/ARCHITECTURE.md) explains the boundaries and intentional limitations; [AUTH.md](docs/AUTH.md) documents the human identity model and bootstrap.
 
 Current implementation references: [Wrangler configuration](https://developers.cloudflare.com/workers/wrangler/configuration/), [Workers Vitest plugin](https://developers.cloudflare.com/workers/testing/vitest-integration/), [local bindings](https://developers.cloudflare.com/workers/local-development/bindings-per-env/), and [Workers DNS](https://developers.cloudflare.com/workers/runtime-apis/nodejs/dns/). The installed plugin exports `readD1Migrations` from its package root; the pinned package declarations are authoritative where documentation examples differ.

@@ -208,6 +208,17 @@ curl -X PUT http://127.0.0.1:8787/api/admin/apps/demo/proxy-sources/weather \
 
 For an upstream credential, configure `"secret_headers":{"Authorization":"WEATHER_KEY"}` and put `{"WEATHER_KEY":"Bearer actual-upstream-secret"}` in the Worker secret `PROXY_SECRETS` (locally in ignored `.dev.vars`). The value is the complete header value. Secret references remain admin-visible; values never come from D1 or callers. Ordinary headers must not contain credentials; Authorization is rejected there. Host, Cookie, forwarding, Cloudflare, and transport headers are forbidden.
 
+## Public Safari projection
+
+Hank & Heather's Wildlife Safari uses a public, presentation-safe projection with no bearer credential:
+
+| Method/path | Behavior |
+| --- | --- |
+| GET `/api/public/wildlife-safari/observations` | curated observations with allowlisted fields only |
+| GET `/api/public/wildlife-safari/files/:id` | approved image bytes for a curated record |
+
+Only records explicitly listed in `safari_public_records` are returned. Responses contain species, category, `observed_at`, count, description, a coarse approximate location (one decimal degree, `approximate: true`), normalized weather, and photo references. Exact GPS, transcripts, field notes, behavior/habitat, tags, raw payloads, file metadata, R2 object keys, and tokens are never returned. Photos stream from private R2 with correct content type, inline disposition, `nosniff`, and `Cache-Control: public, max-age=3600`; arbitrary IDs are rejected and only image files linked to curated records are served. CORS echoes only the exact Safari origin (`https://hmarquardt.github.io`); it is not the security boundary. The underlying `wildlife-field-recorder` app remains private and authenticated.
+
 ## Browser preflight
 
 ```sh

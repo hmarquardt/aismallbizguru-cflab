@@ -7,6 +7,7 @@ import { auth, authCors } from './routes/auth';
 import { records } from './routes/records';
 import { files } from './routes/files';
 import { proxy } from './routes/proxy';
+import { publicSafari } from './routes/public-safari';
 import { accountPage, forgotPage, loginPage, resetPage, usersPage } from './ui';
 
 const methods = ['GET', 'POST', 'PATCH', 'DELETE'];
@@ -21,7 +22,8 @@ export function createApp(adminAuth: MiddlewareHandler<ContextEnv>) {
   app.use('*', async (c, next) => {
     const start = Date.now();
     await next();
-    c.header('Cache-Control', 'no-store');
+    // Public media may set its own cache policy; everything else is no-store.
+    if (!c.res.headers.has('Cache-Control')) c.header('Cache-Control', 'no-store');
     c.header('X-Content-Type-Options', 'nosniff');
     c.header('Referrer-Policy', 'no-referrer');
     if (!c.res.headers.has('Vary')) c.header('Vary', 'Origin');
@@ -40,6 +42,7 @@ export function createApp(adminAuth: MiddlewareHandler<ContextEnv>) {
   app.get('/api/health', c => c.json({ status: 'ok', service: 'cflab' }));
   app.use('/api/auth/*', authCors);
   app.route('/api/auth', auth);
+  app.route('/api/public/wildlife-safari', publicSafari);
   app.use('/api/admin/*', adminAuth);
   app.route('/api/admin', admin);
   app.get('/admin', c => c.redirect('/admin/users'));

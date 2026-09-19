@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { existsSync, readFileSync } from 'node:fs';
 import {
   appInsertSql, assertGetOnly, buildImportPlan, collectComplete, cflabObjectKey, diffSnapshots,
   fileInsertSql, recordInsertSql, recordKey, redactUrl, rewriteLegacyFileUrls, sha256Hex, sqlValue,
@@ -132,4 +133,15 @@ test('diffs snapshots for delta reconciliation', () => {
   const delta = diffSnapshots(snapshot([record(), removedRecord], [file()]), snapshot([changedRecord, newRecord], [file()]));
   assert.deepEqual(delta.records, { added: 1, changed: 1, disappeared: 1, unchanged: 0 });
   assert.deepEqual(delta.files, { added: 0, changed: 0, disappeared: 0, unchanged: 1 });
+});
+
+test('public Safari client contains no embedded credential and targets CFLab public routes', () => {
+  const candidates = [process.env.SAFARI_CLIENT_PATH, new URL('../../../junkdrawer/hank_heather_wilderness_safari.html', import.meta.url).pathname];
+  const path = candidates.find(candidate => candidate && existsSync(candidate));
+  if (!path) return;
+  const html = readFileSync(path, 'utf8');
+  assert.doesNotMatch(html, /READONLY_TOKEN|Authorization|Bearer /);
+  assert.doesNotMatch(html, /(?:^|[^a-z])lab\.aismallbizguru\.com\/api\/(?!analytics)/m);
+  assert.doesNotMatch(html, /['"][A-Za-z0-9_-]{32,}['"]/);
+  assert.match(html, /cflab\.aismallbizguru\.com\/api\/public\/wildlife-safari/);
 });

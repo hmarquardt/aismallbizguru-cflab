@@ -88,6 +88,33 @@ Snapshots contain GPS coordinates and sensitive wildlife data. `.migration/` is 
 | analytics | deferred | separate workstream; dashboard reads need an unavailable credential |
 | events, jobs, backup_runs, registry/schema UI, creator-token fields | discarded | no consumer or operational value in CFLab |
 
+## Safari public projection and curation
+
+Hank & Heather's Wildlife Safari reads a public projection instead of the private wildlife app:
+
+```text
+GET /api/public/wildlife-safari/observations
+GET /api/public/wildlife-safari/files/:id
+```
+
+Only records explicitly listed in `safari_public_records` are exposed, and responses are constructed from an allowlist: species, category, `observed_at`, count, description, normalized weather, a coarse approximate location (one decimal degree), and photo references. Exact GPS, transcripts, field notes, behavior/habitat, tags, raw payloads, file metadata, and R2 object keys are never returned. Photos are served only when the file is an image and its record is curated.
+
+The initial allowlist was seeded from migrated observations that have at least one image file (44 records, 63 photos). This is an explicit, rerunnable rule; operators can curate further:
+
+```sh
+# seed (idempotent): photo-bearing observations
+npx wrangler d1 execute DB --remote --config wrangler.jsonc --command "
+INSERT OR IGNORE INTO safari_public_records (record_id, created_at)
+SELECT DISTINCT f.record_id, datetime('now') FROM files f JOIN records r ON r.id = f.record_id
+WHERE f.app_id='wildlife-field-recorder' AND f.content_type LIKE 'image/%' AND f.record_id IS NOT NULL;"
+
+# add or remove a specific record
+npx wrangler d1 execute DB --remote --config wrangler.jsonc --command "INSERT OR IGNORE INTO safari_public_records (record_id, created_at) VALUES ('<record-id>', datetime('now'));"
+npx wrangler d1 execute DB --remote --config wrangler.jsonc --command "DELETE FROM safari_public_records WHERE record_id='<record-id>';"
+```
+
+The Safari client contains no credential. `npm run test:migration` includes a static assertion (when the sibling client checkout is present) that rejects `Authorization`/`Bearer`/`READONLY_TOKEN`, token-like literals, and any non-analytics LabBox API base.
+
 ## Baseline results (snapshot `20260919T012121Z`)
 
 ```text

@@ -145,3 +145,20 @@ test('public Safari client contains no embedded credential and targets CFLab pub
   assert.doesNotMatch(html, /['"][A-Za-z0-9_-]{32,}['"]/);
   assert.match(html, /cflab\.aismallbizguru\.com\/api\/public\/wildlife-safari/);
 });
+
+test('Pattern Lab client uses CFLab human sessions with no legacy token handling', () => {
+  const candidates = [process.env.PATTERN_LAB_CLIENT_PATH, new URL('../../../junkdrawer/wildlife-pattern-lab.html', import.meta.url).pathname];
+  const path = candidates.find(candidate => candidate && existsSync(candidate));
+  if (!path) return;
+  const html = readFileSync(path, 'utf8');
+  assert.match(html, /cflab\.aismallbizguru\.com/);
+  assert.doesNotMatch(html, /(?:^|[^a-z])lab\.aismallbizguru\.com\/api\/(?!analytics)/m);
+  assert.doesNotMatch(html, /READONLY_TOKEN|authHeaders|saveSettings|loadSettingsForm|settings\.token|save-settings/);
+  assert.match(html, /sessionStorage/);
+  assert.match(html, /api\/auth\/login/);
+  assert.match(html, /api\/auth\/me/);
+  assert.match(html, /next_cursor/);
+  assert.match(html, /Malformed pagination cursor/);
+  assert.match(html, /Repeated pagination cursor/);
+  assert.match(html, /existing cache kept/);
+});

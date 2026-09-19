@@ -9,3 +9,5 @@ coverage/
 .DS_Store
 test/remote/fixtures.local.json
 test/remote/collections.local.json
+
+.migration/

@@ -9,5 +9,5 @@ export default defineConfig({
       PROXY_ALLOWED_HOSTS: 'api.open-meteo.com',
     } },
   })],
-  test: { include: ['test/**/*.test.ts'] },
+  test: { include: ['test/**/*.test.ts'], exclude: ['**/node_modules/**', '**/dist/**', 'test/migration/**'] },
 });

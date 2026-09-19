@@ -3,7 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=22.12.0" },
+  "engines": {
+    "node": ">=22.12.0"
+  },
   "scripts": {
     "dev": "wrangler dev --config wrangler.local.jsonc --ip 127.0.0.1",
     "db:migrate": "wrangler d1 migrations apply DB --local --config wrangler.local.jsonc",
@@ -12,10 +14,13 @@
     "test": "vitest run",
     "test:compat": "node --test test/remote/compat.remote.mjs",
     "test:compat:harness": "node --test test/remote/probes.test.mjs",
-    "check": "npm run typecheck && npm test && npm run test:compat:harness",
-    "build": "wrangler deploy --dry-run --outdir dist"
+    "check": "npm run typecheck && npm test && npm run test:compat:harness && npm run test:migration",
+    "build": "wrangler deploy --dry-run --outdir dist",
+    "test:migration": "node --test test/migration/*.test.ts"
   },
-  "dependencies": { "hono": "4.13.8" },
+  "dependencies": {
+    "hono": "4.13.8"
+  },
   "devDependencies": {
     "@cloudflare/vitest-plugin": "1.1.13",
     "@types/node": "22.19.15",

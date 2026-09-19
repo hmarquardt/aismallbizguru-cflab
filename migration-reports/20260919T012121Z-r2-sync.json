@@ -1,0 +1,13 @@
+{
+  "mode": "r2-sync",
+  "snapshot_id": "20260919T012121Z",
+  "bucket": "cflab-files",
+  "existing_before": 393,
+  "missing": 758,
+  "uploaded": 758,
+  "uploaded_bytes": 181529206,
+  "upload_failed": 0,
+  "verified": 1151,
+  "mismatch": 0,
+  "verify_mode": "all"
+}

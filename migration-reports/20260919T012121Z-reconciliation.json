@@ -1,0 +1,47 @@
+{
+  "mode": "reconciliation",
+  "target": "remote",
+  "snapshot_id": "20260919T012121Z",
+  "snapshot_completed_at": "2026-09-19T01:59:37.319Z",
+  "datasets": [
+    {
+      "dataset": "top-hat-ferals/sightings",
+      "source": 10,
+      "destination": 10,
+      "match": true,
+      "difference": 0
+    },
+    {
+      "dataset": "wildlife-field-recorder/observations",
+      "source": 1092,
+      "destination": 1092,
+      "match": true,
+      "difference": 0
+    },
+    {
+      "dataset": "wildlife-field-recorder/trips",
+      "source": 51,
+      "destination": 51,
+      "match": true,
+      "difference": 0
+    }
+  ],
+  "records": {
+    "source": 1153,
+    "destination": 1153,
+    "match": true
+  },
+  "files": {
+    "source_metadata": 1151,
+    "destination_metadata": 1151,
+    "source_bytes": 250088696,
+    "destination_bytes": 250088696,
+    "match": true
+  },
+  "relationship": {
+    "source_linked": 1151,
+    "destination_linked": 1151
+  },
+  "orphan_files": 0,
+  "soft_deleted": "not observable through the live read API; recoverable later from the encrypted Restic archive"
+}

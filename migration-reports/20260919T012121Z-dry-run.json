@@ -1,0 +1,25 @@
+{
+  "mode": "dry-run",
+  "target": "remote",
+  "snapshot_id": "20260919T012121Z",
+  "source": "live LabBox read API",
+  "apps_to_create": 2,
+  "app_conflicts": 0,
+  "records_insert": 1153,
+  "records_present": 0,
+  "records_conflicts": 0,
+  "records_malformed": 0,
+  "files_insert": 1151,
+  "files_present": 0,
+  "files_conflicts": 0,
+  "files_malformed": 0,
+  "orphan_files": 0,
+  "transforms": 54,
+  "bytes_to_copy": 250088696,
+  "plan_examples": {
+    "conflicts": [],
+    "malformed": [],
+    "orphans": [],
+    "app_conflicts": []
+  }
+}

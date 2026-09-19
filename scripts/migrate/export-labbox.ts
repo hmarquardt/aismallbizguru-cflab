@@ -85,8 +85,8 @@ const missing: string[] = [];
 const hashes: Record<string, { sha256: string; bytes: number; content_type: string }> = {};
 let downloaded = 0;
 let bytesDownloaded = 0;
+mkdirSync(join(outDir, 'files/objects'), { recursive: true });
 if (!skipFiles) {
-  mkdirSync(join(outDir, 'files/objects'), { recursive: true });
   const concurrency = Math.max(1, Math.min(8, Number(arg('concurrency') ?? '5')));
   let cursor = 0;
   let finished = 0;

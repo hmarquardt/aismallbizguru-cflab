@@ -57,7 +57,7 @@ describe('health and administration', () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ status: 'ok', service: 'cflab' });
   });
-  it.each(['https://cflab.aismallbizguru.com', 'https://future-api.example'])('health is hostname-independent and dependency-free at %s', async origin => {
+  it.each(['https://cflab.aismallbizguru.com', 'https://lab.aismallbizguru.com', 'https://future-api.example'])('health is hostname-independent and dependency-free at %s', async origin => {
     const response = await production.fetch(new Request(`${origin}/api/health`), {} as Bindings);
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ status: 'ok', service: 'cflab' });

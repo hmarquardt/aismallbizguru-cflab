@@ -1,6 +1,10 @@
-# LabBox hostname cutover and VM retirement (prepared, not executed)
+# LabBox hostname cutover and VM retirement
 
-This plan moves `lab.aismallbizguru.com` from the legacy VM to the existing `cflab` Worker. It reuses the existing Worker, operational D1, `cflab-analytics` D1, and `cflab-files` R2. It is **not executed** in this pass.
+**Status: cutover executed 2026-09-20.** `lab.aismallbizguru.com` now routes to the existing `cflab` Worker through a zone-scoped Worker Route (`lab.aismallbizguru.com/*`). A Worker route was chosen over a custom domain because the legacy proxied DNS record could not be inspected or replaced with the available permissions; the route intercepts traffic at the edge, requires no DNS mutation, and is reversible by removing the route. Both `lab.aismallbizguru.com` and `cflab.aismallbizguru.com` serve the same Worker, D1, analytics D1, and R2 resources.
+
+Verification after cutover: health, 404 behavior, human login/`me`/logout, wildlife observation/trip/file reads, a create-update-archive cycle, Safari public observations and photos, Top Hat Ferals public sightings, and the analytics collector all passed through `lab.`. Browser page loads of existing Junk Drawer pages sent collector requests to `lab.` and landed rows in `cflab-analytics`; DNT suppression was re-verified (zero requests). No VM traffic is required.
+
+The legacy VM is operationally obsolete and safe to stop. It has not been stopped because VM control is unavailable from this environment. Do not delete it until a subsequent explicit instruction; historical analytics remains the only unresolved archival item.
 
 ## Current state
 

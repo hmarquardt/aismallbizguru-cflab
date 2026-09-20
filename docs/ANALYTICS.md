@@ -37,7 +37,7 @@ Privacy: the collector intentionally does **not** populate `ip_hash`, `user_agen
 }
 ```
 
-- Path and request shape match the legacy API, so the 72 existing pages that load `analytics-lite.js` with `data-api="https://lab.aismallbizguru.com/api/analytics/collect"` need **zero edits** after the hostname cutover.
+- Path and request shape match the legacy API, so the 72 existing pages that load `analytics-lite.js` with `data-api="https://lab.aismallbizguru.com/api/analytics/collect"` need **zero edits**. Since the 2026-09-20 cutover, both `lab.aismallbizguru.com` and `cflab.aismallbizguru.com` serve this endpoint from the same Worker.
 - Validation: known site, site-scoped Origin, event type allowlist, bounded string/number fields, 32 KiB body limit, JSON only, bound SQL.
 - CORS: only the exact origins registered per site (`https://hmarquardt.github.io`, `https://tophatferals.com`, `https://www.tophatferals.com`); no wildcard.
 - Rate limit: `RL_ANALYTICS` (120 requests/minute per site + hashed client IP).

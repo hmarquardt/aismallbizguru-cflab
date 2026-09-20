@@ -165,4 +165,6 @@ Optionally set `COMPAT_ORIGIN` to the exact frontend origin to check GET CORS re
 
 ## Future cutover boundary
 
+**This cutover was executed on 2026-09-20.** `lab.aismallbizguru.com` now routes to the existing `cflab` Worker via a zone-scoped Worker Route; both hostnames serve the same Worker, D1, `cflab-analytics`, and `cflab-files`. The legacy VM is retired/retirable. See [CUTOVER.md](CUTOVER.md) for the record and the retirement checklist. The historical notes below remain for reference.
+
 Keep consumers' base URLs configurable and preserve relative file references. Complete API compatibility, token migration, and data reconciliation while both hosts are live. A separately approved future cutover can attach `lab.aismallbizguru.com` to the same CFLab Worker and existing D1/R2 bindings, while retaining the `cflab` hostname. Host-bound Access rules, certificates, existing DNS/route conflicts, and the final legacy write delta must be handled then. The old hostname is intentionally absent from current Wrangler routes.

@@ -38,7 +38,9 @@ No automatic route aliases are installed. Compatibility-sensitive routing lives 
 6. Cut over one app only after acceptance. Use a short write freeze/final delta import unless a tested synchronizer exists. Issue new scoped tokens, change that client's base URL, and monitor errors. Keep the old system and export intact during a defined rollback period.
 7. Roll back by restoring the prior client URL/token. Reconcile writes made after cutover before doing so; a DNS switch alone does not undo new data. Retire the VPS only after every consumer, object, backup, and rollback obligation is accounted for.
 
-## Eventual hostname cutover (not authorized or performed here)
+## Hostname cutover (completed 2026-09-20)
+
+`lab.aismallbizguru.com` now routes to the existing `cflab` Worker alongside `cflab.aismallbizguru.com`; both hostnames share the operational D1, `cflab-analytics`, and `cflab-files`. The legacy VM is retirable. Historical analytics remains the only unresolved archival item. The notes below document the original plan and constraints.
 
 Resolve client/API compatibility and data synchronization **during the parallel run**, before changing the old hostname. Clients should keep the API base URL in configuration; CFLab uses relative download URLs and contains no deployment hostname in application logic. Keep the same CFLab Worker, D1 database, R2 bucket, IDs, and tokens when adding a hostname later. Do not create a new backend or move CFLab data solely to change domains.
 

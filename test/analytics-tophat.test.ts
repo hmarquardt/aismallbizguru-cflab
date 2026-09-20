@@ -106,6 +106,13 @@ describe('Top Hat Ferals public projection', () => {
     expect((await call(`/api/public/top-hat-ferals/files/${wildlifeImageId}`)).status).toBe(404);
     expect((await call('/api/public/top-hat-ferals/files/not-a-uuid')).status).toBe(404);
   });
+  it('serves the public projection through either production hostname', async () => {
+    const response = await local.fetch(new Request('https://lab.aismallbizguru.com/api/public/top-hat-ferals/sightings'), testEnv);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ total: 1 });
+    const cflabResponse = await local.fetch(new Request('https://cflab.aismallbizguru.com/api/public/top-hat-ferals/sightings'), testEnv);
+    expect(await cflabResponse.json()).toMatchObject({ total: 1 });
+  });
   it('rejects unlisted origins', async () => {
     expect((await call('/api/public/top-hat-ferals/sightings', 'GET', undefined, null, { Origin: 'https://evil.example' })).status).toBe(403);
     expect((await call('/api/public/top-hat-ferals/sightings')).status).toBe(200);

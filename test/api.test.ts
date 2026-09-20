@@ -107,7 +107,9 @@ describe('records, isolation, and tokens', () => {
     expect((await call(path, 'DELETE')).status).toBe(204);
     expect((await call(path)).status).toBe(404);
     expect((await call(path, 'PATCH', { data: {} })).status).toBe(404);
-    expect((await call(path, 'DELETE')).status).toBe(404);
+    expect((await call(path, 'DELETE')).status).toBe(204);
+    const archived = await bindings.DB.prepare('SELECT deleted_at FROM records WHERE app_id = ? AND resource = ? AND id = ?').bind('demo', 'notes', record.id).first<{ deleted_at: string | null }>();
+    expect(archived?.deleted_at).toBeTruthy();
   });
   it('paginates without overlap and filters status', async () => {
     for (let i = 0; i < 3; i++) await call(records, 'POST', { data: { i }, status: i === 2 ? 'done' : 'draft' });

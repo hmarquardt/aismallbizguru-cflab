@@ -103,7 +103,7 @@ publicSafari.get('/observations', async c => {
   const { results: records } = await c.env.DB.prepare(
     `SELECT r.id, r.data_json FROM safari_public_records s
      JOIN records r ON r.id = s.record_id
-     WHERE r.app_id = ? AND r.resource = ?
+     WHERE r.app_id = ? AND r.resource = ? AND r.deleted_at IS NULL
      ORDER BY r.id LIMIT ?`,
   ).bind(SAFARI_APP_ID, SAFARI_RESOURCE, PUBLIC_RECORD_LIMIT + 1).all<RecordRow>();
   if (records.length > PUBLIC_RECORD_LIMIT) throw new ApiError(503, 'projection_too_large', 'Public projection exceeds its configured bound');
@@ -132,7 +132,8 @@ publicSafari.get('/files/:id', async c => {
   const row = await c.env.DB.prepare(
     `SELECT f.object_key, f.content_type FROM files f
      JOIN safari_public_records s ON s.record_id = f.record_id
-     WHERE f.id = ? AND f.app_id = ? AND f.content_type LIKE 'image/%'`,
+     JOIN records r ON r.id = f.record_id AND r.app_id = f.app_id
+     WHERE f.id = ? AND f.app_id = ? AND f.content_type LIKE 'image/%' AND r.deleted_at IS NULL`,
   ).bind(fileId, SAFARI_APP_ID).first<{ object_key: string; content_type: string }>();
   if (!row) throw new ApiError(404, 'file_not_found', 'File not found');
   const object = await c.env.FILES.get(row.object_key);

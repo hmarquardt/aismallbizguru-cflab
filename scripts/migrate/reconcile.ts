@@ -45,7 +45,7 @@ for (const record of snapshot.records) {
   sourceByDataset.set(key, (sourceByDataset.get(key) ?? 0) + 1);
 }
 const destinationByDataset = new Map<string, number>();
-for (const row of d1Query('SELECT app_id, resource, COUNT(*) AS n FROM records GROUP BY app_id, resource')) {
+for (const row of d1Query('SELECT app_id, resource, COUNT(*) AS n FROM records WHERE deleted_at IS NULL GROUP BY app_id, resource')) {
   destinationByDataset.set(`${row.app_id}/${row.resource}`, Number(row.n));
 }
 const datasetResults = [...new Set([...sourceByDataset.keys(), ...destinationByDataset.keys()])].sort().map(key => {

@@ -128,6 +128,11 @@ describe('public Safari projection', () => {
     expect(plain.status).toBe(200);
     expect(plain.headers.has('Access-Control-Allow-Origin')).toBe(false);
   });
+  it('excludes archived records from the public projection and photo route', async () => {
+    await bindings.DB.prepare('UPDATE records SET deleted_at = ? WHERE id = ?').bind(new Date().toISOString(), curatedId).run();
+    expect(await (await call('/api/public/wildlife-safari/observations')).json()).toMatchObject({ total: 0 });
+    expect((await call(`/api/public/wildlife-safari/files/${curatedImageId}`)).status).toBe(404);
+  });
   it('works through the production entrypoint with no environment bindings beyond DB/FILES', async () => {
     const response = await production.fetch(new Request('https://cflab.aismallbizguru.com/api/public/wildlife-safari/observations'), testEnv);
     expect(response.status).toBe(200);

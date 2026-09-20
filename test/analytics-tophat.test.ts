@@ -180,3 +180,45 @@ describe('analytics collector and dashboard', () => {
     expect((await call('/api/analytics/summary?site_id=junkdrawer&from=2026-01-01&to=bad', 'GET', undefined, token)).status).toBe(400);
   });
 });
+
+describe('Top Hat Ferals origin registration and CORS', () => {
+  beforeEach(async () => {
+    await bindings.DB.batch([
+      bindings.DB.prepare("INSERT OR IGNORE INTO app_origins (app_id, origin) VALUES ('top-hat-ferals','https://tophatferals.com')"),
+      bindings.DB.prepare("INSERT OR IGNORE INTO app_origins (app_id, origin) VALUES ('top-hat-ferals','https://www.tophatferals.com')"),
+      bindings.DB.prepare("INSERT OR IGNORE INTO app_origins (app_id, origin) VALUES ('top-hat-ferals','https://tophatferals.com')"),
+    ]);
+  });
+  it('registers both production origins idempotently and ships the seed in a migration', async () => {
+    const { results } = await bindings.DB.prepare("SELECT origin FROM app_origins WHERE app_id = 'top-hat-ferals' ORDER BY origin").all<{ origin: string }>();
+    expect(results.map(row => row.origin)).toEqual(['https://tophatferals.com', 'https://www.tophatferals.com']);
+  });
+  it('allows auth and app writes from Top Hat origins and rejects unrelated origins', async () => {
+    const now = new Date().toISOString();
+    await bindings.DB.prepare('INSERT INTO users (id, email, password_hash, active, is_admin, created_at, updated_at) VALUES (?, ?, ?, 1, 1, ?, ?)')
+      .bind(crypto.randomUUID(), 'thf-admin@example.com', await hashPassword(password), now, now).run();
+    const preflight = await call('/api/auth/login', 'OPTIONS', undefined, null, { Origin: 'https://tophatferals.com', 'Access-Control-Request-Method': 'POST', 'Access-Control-Request-Headers': 'content-type' });
+    expect(preflight.status).toBe(204);
+    expect(preflight.headers.get('Access-Control-Allow-Origin')).toBe('https://tophatferals.com');
+    const login = await call('/api/auth/login', 'POST', { email: 'thf-admin@example.com', password }, null, { Origin: 'https://www.tophatferals.com' });
+    expect(login.status).toBe(200);
+    expect(login.headers.get('Access-Control-Allow-Origin')).toBe('https://www.tophatferals.com');
+    const token = (await login.json<{ token: string }>()).token;
+    expect((await call('/api/auth/me', 'GET', undefined, token, { Origin: 'https://tophatferals.com' })).status).toBe(200);
+    expect((await call('/api/auth/login', 'POST', { email: 'thf-admin@example.com', password: 'wrong password here' }, null, { Origin: 'https://tophatferals.com' })).status).toBe(401);
+    expect((await call('/api/auth/login', 'POST', { email: 'thf-admin@example.com', password }, null, { Origin: 'https://evil.example' })).status).toBe(403);
+    const records = '/api/apps/top-hat-ferals/resources/sightings/records';
+    const appPreflight = await call(records, 'OPTIONS', undefined, null, { Origin: 'https://tophatferals.com', 'Access-Control-Request-Method': 'POST', 'Access-Control-Request-Headers': 'authorization,content-type' });
+    expect(appPreflight.status).toBe(204);
+    const create = await call(records, 'POST', { data: { cat_name: 'Origin Test', date: '2026-09-20' } }, token, { Origin: 'https://tophatferals.com' });
+    expect(create.status).toBe(201);
+    expect(create.headers.get('Access-Control-Allow-Origin')).toBe('https://tophatferals.com');
+    const files = '/api/apps/top-hat-ferals/files';
+    const uploadPreflight = await call(files, 'OPTIONS', undefined, null, { Origin: 'https://www.tophatferals.com', 'Access-Control-Request-Method': 'POST', 'Access-Control-Request-Headers': 'authorization,content-type,x-filename,x-file-id,x-record-id,x-resource' });
+    expect(uploadPreflight.status).toBe(204);
+    const recordId = (await create.json<{ id: string }>()).id;
+    const upload = await local.fetch(new Request(`http://localhost${files}`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'image/jpeg', 'X-Filename': 'origin.jpg', 'X-File-Id': crypto.randomUUID(), 'X-Record-Id': recordId, 'X-Resource': 'sightings', Origin: 'https://www.tophatferals.com' }, body: new Uint8Array([1, 2, 3, 4]) }), testEnv);
+    expect(upload.status).toBe(201);
+    expect(upload.headers.get('Access-Control-Allow-Origin')).toBe('https://www.tophatferals.com');
+  });
+});

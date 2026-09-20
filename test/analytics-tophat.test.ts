@@ -113,6 +113,30 @@ describe('Top Hat Ferals public projection', () => {
     const cflabResponse = await local.fetch(new Request('https://cflab.aismallbizguru.com/api/public/top-hat-ferals/sightings'), testEnv);
     expect(await cflabResponse.json()).toMatchObject({ total: 1 });
   });
+  it('returns newest linked image first and hides archived sightings', async () => {
+    const older = crypto.randomUUID();
+    const newer = crypto.randomUUID();
+    const now = new Date();
+    const olderAt = new Date(now.getTime() - 60_000).toISOString();
+    const newerAt = now.toISOString();
+    for (const [id, at] of [[older, olderAt], [newer, newerAt]] as const) {
+      await bindings.FILES.put(`apps/top-hat-ferals/files/${id}`, 'image-bytes', { httpMetadata: { contentType: 'image/jpeg' } });
+      await bindings.DB.prepare('INSERT INTO files (id, app_id, object_key, filename, content_type, size_bytes, checksum, created_at, resource, record_id) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)')
+        .bind(id, 'top-hat-ferals', `apps/top-hat-ferals/files/${id}`, `${id}.jpg`, 'image/jpeg', 11, at, 'sightings', topHatSightingId).run();
+    }
+    const projection = await (await call('/api/public/top-hat-ferals/sightings')).json<{ records: Array<{ photos: Array<{ id: string }> }> }>();
+    expect(projection.records[0]?.photos[0]?.id).toBe(newer);
+    const ids = projection.records[0]?.photos.map(photo => photo.id) ?? [];
+    expect(ids.indexOf(newer)).toBeLessThan(ids.indexOf(older));
+    const nowIso = new Date().toISOString();
+    await bindings.DB.prepare('INSERT INTO users (id, email, password_hash, active, is_admin, created_at, updated_at) VALUES (?, ?, ?, 1, 1, ?, ?)')
+      .bind(crypto.randomUUID(), 'archive-admin@example.com', await hashPassword(password), nowIso, nowIso).run();
+    const archiveLogin = await call('/api/auth/login', 'POST', { email: 'archive-admin@example.com', password });
+    const archiveToken = (await archiveLogin.json<{ token: string }>()).token;
+    expect((await call(`/api/apps/top-hat-ferals/resources/sightings/records/${topHatSightingId}`, 'DELETE', undefined, archiveToken)).status).toBe(204);
+    const after = await (await call('/api/public/top-hat-ferals/sightings')).json<{ total: number }>();
+    expect(after.total).toBe(0);
+  });
   it('rejects unlisted origins', async () => {
     expect((await call('/api/public/top-hat-ferals/sightings', 'GET', undefined, null, { Origin: 'https://evil.example' })).status).toBe(403);
     expect((await call('/api/public/top-hat-ferals/sightings')).status).toBe(200);

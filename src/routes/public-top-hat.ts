@@ -38,7 +38,7 @@ publicTopHat.get('/:resource', async c => {
   if (ids.length) {
     const placeholders = ids.map(() => '?').join(',');
     const { results: files } = await c.env.DB.prepare(
-      `SELECT id, record_id, content_type FROM files WHERE app_id = ? AND record_id IN (${placeholders}) AND content_type LIKE 'image/%'`,
+      `SELECT id, record_id, content_type FROM files WHERE app_id = ? AND record_id IN (${placeholders}) AND content_type LIKE 'image/%' ORDER BY created_at DESC, id DESC`,
     ).bind(TOP_HAT_APP_ID, ...ids).all<FileRow>();
     for (const file of files) {
       const list = photosByRecord.get(file.record_id) ?? [];

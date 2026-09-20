@@ -8,14 +8,20 @@
   },
   "scripts": {
     "dev": "wrangler dev --config wrangler.local.jsonc --ip 127.0.0.1",
+    "dev:analytics": "wrangler dev --config wrangler.analytics.local.jsonc --ip 127.0.0.1",
     "db:migrate": "wrangler d1 migrations apply DB --local --config wrangler.local.jsonc",
+    "db:migrate:analytics": "wrangler d1 migrations apply ANALYTICS --local --config wrangler.analytics.local.jsonc",
     "types": "wrangler types",
     "typecheck": "tsc --noEmit && tsc --noEmit -p test/tsconfig.json",
     "test": "vitest run",
+    "test:ui": "node --test test/ui/*.test.mjs",
     "test:compat": "node --test test/remote/compat.remote.mjs",
     "test:compat:harness": "node --test test/remote/probes.test.mjs",
-    "check": "npm run typecheck && npm test && npm run test:compat:harness && npm run test:migration",
+    "check": "npm run typecheck && npm run verify:chart && npm test && npm run test:ui && npm run test:compat:harness && npm run test:migration",
+    "vendor:chart": "node scripts/vendor-chart.mjs",
+    "verify:chart": "node scripts/vendor-chart.mjs verify",
     "build": "wrangler deploy --dry-run --outdir dist",
+    "build:analytics": "wrangler deploy --dry-run --outdir dist-analytics --config wrangler.analytics.jsonc",
     "test:migration": "node --test test/migration/*.test.ts"
   },
   "dependencies": {
@@ -24,6 +30,8 @@
   "devDependencies": {
     "@cloudflare/vitest-plugin": "1.1.13",
     "@types/node": "22.19.15",
+    "chart.js": "4.5.1",
+    "happy-dom": "20.14.5",
     "typescript": "5.9.3",
     "vitest": "4.1.11",
     "wrangler": "4.135.0"

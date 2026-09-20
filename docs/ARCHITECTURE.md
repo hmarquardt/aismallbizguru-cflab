@@ -4,13 +4,15 @@
 
 The `cflab` Worker is configured for the exact custom domain `cflab.aismallbizguru.com`, with a separate `cflab` D1 database and private `cflab-files` R2 bucket. This is the independent production-equivalent environment. The existing `lab.aismallbizguru.com` service, DNS, and infrastructure stay unchanged. Local Wrangler uses local bindings without custom-domain routes. Application logic has no deployment hostname; health always identifies `service: "cflab"`, and download URLs are relative. A future approved hostname change can keep the same Worker and data bindings after compatibility work is complete. See [deployment instructions](DEPLOYMENT.md).
 
+Analytics is a second Worker (`cflab-analytics`, `wrangler.analytics.jsonc`) serving `analytics.aismallbizguru.com` plus the specific `lab.`/`cflab.` collector routes. It uses the shared `cflab-analytics` D1 database, serves its own static dashboard, and validates human sessions through the narrow `HumanAuthService` service binding exported by this Worker. CFLab never calls analytics. See [ANALYTICS.md](ANALYTICS.md).
+
 ## Request flow
 
 The production entrypoint authenticates `/api/admin/*` with a human session whose user is an active administrator. The local entrypoint additionally accepts a loopback `DEV_ADMIN_TOKEN`; production never imports that development check. Hono is the sole runtime dependency: it removes routing/parameter/middleware plumbing without hiding SQL or application logic.
 
 App requests load an active app, check the exact Origin against `app_origins`, handle preflight, authenticate either a machine app token or a human session, enforce the route scope, validate input, and execute bound SQL or a binding operation. Every record/file lookup and mutation includes its owning app, and records also include resource. Errors have one JSON envelope. Health returns liveness without binding calls.
 
-Structured logs contain only event name, method, status, and duration. Unexpected failures log a generic event without SQL, URLs, headers, or payloads. Wrangler invocation logs are disabled in the production config to avoid automatic full-URL logging. A future Analytics Engine write belongs in a small optional reporting function after request handling; there is no event table or analytics request path today.
+Structured logs contain only event name, method, status, and duration. Unexpected failures log a generic event without SQL, URLs, headers, or payloads. Wrangler invocation logs are disabled in the production config to avoid automatic full-URL logging. Analytics collection is handled by the separate Analytics Worker; CFLab's remaining `/api/analytics/*` routes are a temporary legacy reporting surface backed by the legacy tables that analytics dual-writes. See [ANALYTICS.md](ANALYTICS.md).
 
 ## D1 and pagination
 
@@ -63,4 +65,4 @@ Fetch uses `redirect: manual`; every redirect is rejected, even to an otherwise 
 
 ## Services intentionally absent
 
-No Durable Objects: there is no per-entity coordination or live session requirement. No Queues or Workflows: requests are small and synchronous. No Analytics Engine yet: operational logs suffice. No DuckDB, Iceberg, or R2 Data Catalog: there is no current archival query workload. R2 and a small reporting seam leave room for these later without adding them to ordinary requests. No ORM, schema framework, third-party identity provider, MFA, scheduler, or VPS. Authentication mail uses the native `send_email` binding, and rate limiting uses native rate-limit bindings, rather than external services.
+No Durable Objects: there is no per-entity coordination or live session requirement. No Queues or Workflows: requests are small and synchronous. No Analytics Engine: analytics is a separate Worker with explicit D1 tables. No DuckDB, Iceberg, or R2 Data Catalog: there is no current archival query workload. R2 and a small reporting seam leave room for these later without adding them to ordinary requests. No ORM, schema framework, third-party identity provider, MFA, or VPS. Authentication mail uses the native `send_email` binding, rate limiting uses native rate-limit bindings, and analytics retention/rollups use a native Cron trigger, rather than external services.

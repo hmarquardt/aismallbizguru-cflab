@@ -137,6 +137,31 @@ No client depends on CFLab yet, so rollback touches only CFLab resources. LabBox
 - **Data:** this stage has no client writes. Establish the retention/recovery policy before the pilot writes anything; use D1/R2 exports rather than mutating LabBox.
 - **Teardown (requires separate authorization):** `npx wrangler delete --name cflab --config wrangler.jsonc` removes only the Worker. D1 `cflab` and R2 `cflab-files` are separate and survive until deliberately deleted. Never delete, rename, or repurpose LabBox resources.
 
+## 7. Analytics Worker deployment
+
+The Analytics Worker (`cflab-analytics`, `wrangler.analytics.jsonc`, entrypoint `src/analytics/index.ts`) is a second deployment that shares the existing `cflab-analytics` D1 database. Deploy CFLab first so the `HumanAuthService` named entrypoint exists, then:
+
+```sh
+npx wrangler d1 migrations apply DB --remote --config wrangler.jsonc
+npx wrangler d1 migrations apply ANALYTICS --remote --config wrangler.analytics.jsonc
+npm run typecheck && npm test
+npx wrangler deploy --config wrangler.jsonc --no-x-provision          # CFLab + HumanAuthService
+npx wrangler deploy --config wrangler.analytics.jsonc --no-x-provision
+```
+
+The Analytics config publishes the `analytics.aismallbizguru.com` Custom Domain and two most-specific zone routes (`lab.aismallbizguru.com/api/analytics/collect*`, `cflab.aismallbizguru.com/api/analytics/collect*`) so deployed legacy snippets keep working while the rest of `lab.*` stays on CFLab. Confirm the `analytics.` hostname is free and no wildcard intercepts it; do not modify `lab.` DNS. Verify:
+
+```sh
+curl --fail --silent https://analytics.aismallbizguru.com/api/health     # service: cflab-analytics
+curl -s -o /dev/null -w '%{http_code}\n' https://analytics.aismallbizguru.com/api/sites  # 401
+curl -s -o /dev/null -w '%{http_code}\n' -X POST \
+  -H 'Content-Type: application/json' -H 'Origin: https://hmarquardt.github.io' \
+  -d '{"site":"junkdrawer","event_type":"pageview","visitor_id":"v_smoke","session_id":"s_smoke1","occurred_at":"2026-09-20T12:00:00.000Z","page":{"url":"https://hmarquardt.github.io/smoke","host":"hmarquardt.github.io","path":"/smoke"},"referrer":{},"utm":{},"client":{},"performance":{}}' \
+  https://lab.aismallbizguru.com/api/analytics/collect                    # 200
+```
+
+Then confirm the row through the new dashboard at `https://analytics.aismallbizguru.com/` and remove the smoke row through D1 if desired. Local development uses `npm run db:migrate:analytics` and `npm run dev:analytics`; the service binding resolves to a locally running `npm run dev` CFLab instance. Rollback and remaining manual steps are documented in [ANALYTICS.md](ANALYTICS.md#deployment) and [ANALYTICS.md](ANALYTICS.md#rollback).
+
 ## Read-only parallel checks
 
 The opt-in black-box suite uses Node's built-in test runner and fetch; it is separate from the Workers-compatible local binding tests. No additional dependency is needed. `npm run check` tests its safety/adapter helpers offline; neither ordinary tests nor CI contacts either live hostname.
@@ -165,6 +190,6 @@ Optionally set `COMPAT_ORIGIN` to the exact frontend origin to check GET CORS re
 
 ## Future cutover boundary
 
-**This cutover was executed on 2026-09-20.** `lab.aismallbizguru.com` now routes to the existing `cflab` Worker via a zone-scoped Worker Route; both hostnames serve the same Worker, D1, `cflab-analytics`, and `cflab-files`. The legacy VM is retired/retirable. See [CUTOVER.md](CUTOVER.md) for the record and the retirement checklist. The historical notes below remain for reference.
+**This cutover was executed on 2026-09-20.** `lab.aismallbizguru.com` now routes to the existing `cflab` Worker via a zone-scoped Worker Route; both hostnames serve the same Worker, D1, `cflab-analytics`, and `cflab-files`. The legacy VM is retired/retirable. See [CUTOVER.md](CUTOVER.md) for the record and the retirement checklist. Analytics collection was subsequently split to the separate `cflab-analytics` Worker: the specific `lab.`/`cflab.` `/api/analytics/collect*` routes go directly to analytics while every other `lab.` path stays on CFLab. The historical notes below remain for reference.
 
 Keep consumers' base URLs configurable and preserve relative file references. Complete API compatibility, token migration, and data reconciliation while both hosts are live. A separately approved future cutover can attach `lab.aismallbizguru.com` to the same CFLab Worker and existing D1/R2 bindings, while retaining the `cflab` hostname. Host-bound Access rules, certificates, existing DNS/route conflicts, and the final legacy write delta must be handled then. The old hostname is intentionally absent from current Wrangler routes.

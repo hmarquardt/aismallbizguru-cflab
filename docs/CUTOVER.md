@@ -14,8 +14,8 @@ The legacy VM was stopped on 2026-09-20 and is operationally obsolete. Both host
 | Wildlife Pattern Lab | CFLab human session | private reads |
 | Wildlife Field Recorder | CFLab human session | reads/writes/files |
 | Top Hat Ferals | CFLab public projection + account writes | live at `tophatferals.com` |
-| Analytics collector | CFLab `/api/analytics/collect` | legacy contract preserved; 72 pages unchanged |
-| Analytics dashboard | CFLab admin session | migrated |
+| Analytics collector | Analytics Worker `/api/analytics/collect` | legacy contract preserved; 72 pages unchanged |
+| Analytics dashboard | Analytics Worker (CFLab sign-in) | `https://analytics.aismallbizguru.com/` |
 
 Runtime `lab.aismallbizguru.com` references after this pass:
 - **Intentional**: 72 Junk Drawer pages plus Top Hat Ferals, Pattern Lab, Safari, and Field Recorder analytics collector tags (`/api/analytics/collect`), which CFLab serves at the same path.

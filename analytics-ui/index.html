@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2032%2032%22%3E%3Cdefs%3E%3CclipPath%20id%3D%22flask%22%3E%3Cpath%20d%3D%22M12.5%205v7.5L6.6%2024.2A2.6%202.6%200%200%200%209%2028h14a2.6%202.6%200%200%200%202.4-3.8L19.5%2012.5V5z%22%2F%3E%3C%2FclipPath%3E%3C%2Fdefs%3E%3Cpath%20fill%3D%22%23ffffff%22%20stroke%3D%22%23334155%22%20stroke-width%3D%222.4%22%20stroke-linejoin%3D%22round%22%20d%3D%22M12.5%205v7.5L6.6%2024.2A2.6%202.6%200%200%200%209%2028h14a2.6%202.6%200%200%200%202.4-3.8L19.5%2012.5V5z%22%2F%3E%3Cpath%20clip-path%3D%22url%28%23flask%29%22%20fill%3D%22%232563eb%22%20d%3D%22M4%2019h24v13H4z%22%2F%3E%3Cpath%20fill%3D%22none%22%20stroke%3D%22%23334155%22%20stroke-width%3D%222.4%22%20stroke-linejoin%3D%22round%22%20d%3D%22M12.5%205v7.5L6.6%2024.2A2.6%202.6%200%200%200%209%2028h14a2.6%202.6%200%200%200%202.4-3.8L19.5%2012.5V5z%22%2F%3E%3Cpath%20fill%3D%22none%22%20stroke%3D%22%23334155%22%20stroke-width%3D%222.4%22%20stroke-linecap%3D%22round%22%20d%3D%22M11%205h10%22%2F%3E%3C%2Fsvg%3E">
+<meta name="referrer" content="no-referrer">
+<meta name="cflab-auth-base" content="https://cflab.aismallbizguru.com">
+<title>CFLab Analytics</title>
+<link rel="stylesheet" href="/analytics.css">
+</head>
+<body>
+<div id="login-view" class="login-view">
+  <form id="login-form" class="login-card" autocomplete="on">
+    <h1 class="login-title">CFLab Analytics</h1>
+    <p class="muted">Sign in with your CFLab account.</p>
+    <label class="field">Email
+      <input id="login-email" type="email" name="email" required autocomplete="username">
+    </label>
+    <label class="field">Password
+      <input id="login-password" type="password" name="password" required autocomplete="current-password">
+    </label>
+    <button id="login-submit" type="submit" class="button button-primary">Sign in</button>
+    <p id="login-error" class="form-error" role="alert"></p>
+  </form>
+</div>
+
+<div id="app-view" hidden>
+  <header class="app-header">
+    <div class="header-top">
+      <div class="header-brand">
+        <span class="brand">Analytics</span>
+      </div>
+      <div class="header-controls">
+        <label class="control control-site">
+          <span class="control-label">Site</span>
+          <select id="site-select" aria-label="Site"></select>
+        </label>
+        <label class="control">
+          <span class="control-label">Domain</span>
+          <select id="domain-select" aria-label="Domain"></select>
+        </label>
+        <label class="control">
+          <span class="control-label">Date range</span>
+          <select id="range-select" aria-label="Date range"></select>
+        </label>
+        <div id="custom-range" class="custom-range" hidden>
+          <input id="range-from" type="date" aria-label="From date">
+          <span class="range-sep">–</span>
+          <input id="range-to" type="date" aria-label="To date">
+          <button id="range-apply" type="button" class="button button-secondary">Apply</button>
+          <span id="range-note" class="form-note is-error" role="status"></span>
+        </div>
+        <button id="refresh" type="button" class="button button-secondary" title="Refresh data">Refresh</button>
+      </div>
+      <div class="header-account">
+        <button id="new-site" type="button" class="button button-secondary" hidden>New site</button>
+        <span id="account-email" class="account-email"></span>
+        <button id="sign-out" type="button" class="button button-ghost">Sign out</button>
+      </div>
+    </div>
+    <nav id="tabs" class="tabs" role="tablist" aria-label="Analytics sections"></nav>
+  </header>
+
+  <div id="app-banner" class="banner" role="alert" hidden></div>
+
+  <main class="app-main">
+    <section id="panel-overview" class="panel-view" role="tabpanel" aria-labelledby="tab-overview">
+      <div id="overview-empty" hidden></div>
+      <div id="overview-content">
+        <div id="kpi-grid" class="kpi-grid"></div>
+
+        <div class="card chart-card">
+          <div class="card-header">
+            <h2 class="card-title">Traffic</h2>
+            <div id="metric-switch" class="segmented" role="group" aria-label="Chart metric"></div>
+          </div>
+          <div class="chart-holder"><canvas id="timeseries-chart" aria-label="Traffic over time"></canvas></div>
+          <details class="chart-data">
+            <summary>View data table</summary>
+            <div id="timeseries-table"></div>
+          </details>
+        </div>
+
+        <div class="overview-grid">
+          <div class="card">
+            <div class="card-header"><h2 class="card-title">Top pages</h2><button type="button" class="link-button" data-tab-link="pages">View all</button></div>
+            <div id="overview-pages" class="card-body"></div>
+          </div>
+          <div class="card">
+            <div class="card-header"><h2 class="card-title">Referrers</h2><button type="button" class="link-button" data-tab-link="acquisition">View all</button></div>
+            <div id="overview-referrers" class="card-body"></div>
+          </div>
+          <div class="card">
+            <div class="card-header"><h2 class="card-title">Devices</h2></div>
+            <div class="card-body device-layout">
+              <div class="chart-holder chart-holder-sm"><canvas id="device-chart" aria-label="Device categories"></canvas></div>
+              <div id="overview-devices"></div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-header"><h2 class="card-title">Browsers &amp; OS</h2></div>
+            <div id="overview-platforms" class="card-body"></div>
+          </div>
+          <div class="card">
+            <div class="card-header"><h2 class="card-title">Recent activity</h2></div>
+            <div id="overview-recent" class="card-body"></div>
+          </div>
+          <div class="card">
+            <div class="card-header"><h2 class="card-title">Live</h2><span id="live-stats" class="muted"></span></div>
+            <div id="overview-live" class="card-body"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="panel-pages" class="panel-view" role="tabpanel" aria-labelledby="tab-pages" hidden>
+      <div class="card">
+        <div class="card-header"><h2 class="card-title">Pages</h2><span id="pages-note" class="muted"></span></div>
+        <div id="pages-table" class="card-body"></div>
+      </div>
+    </section>
+
+    <section id="panel-acquisition" class="panel-view" role="tabpanel" aria-labelledby="tab-acquisition" hidden>
+      <div class="two-col">
+        <div class="card">
+          <div class="card-header"><h2 class="card-title">Referrers</h2></div>
+          <div id="acquisition-referrers" class="card-body"></div>
+        </div>
+        <div class="card">
+          <div class="card-header"><h2 class="card-title">Campaigns</h2></div>
+          <div id="acquisition-campaigns" class="card-body"></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="panel-events" class="panel-view" role="tabpanel" aria-labelledby="tab-events" hidden>
+      <div class="two-col">
+        <div class="card">
+          <div class="card-header"><h2 class="card-title">Custom events</h2></div>
+          <div id="events-table" class="card-body"></div>
+        </div>
+        <div class="card">
+          <div class="card-header"><h2 class="card-title">Recent events</h2></div>
+          <div id="events-recent" class="card-body"></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="panel-settings" class="panel-view" role="tabpanel" aria-labelledby="tab-settings" hidden>
+      <div id="settings-role-note" class="role-note" hidden></div>
+      <div class="settings-grid">
+        <div class="card">
+          <div class="card-header"><h2 class="card-title">General</h2></div>
+          <form id="general-form" class="card-body form-grid">
+            <label class="field">Name<input id="site-name" maxlength="100" required></label>
+            <label class="field">Slug<input id="site-slug" maxlength="64"></label>
+            <label class="field">Timezone<input id="site-timezone" placeholder="UTC"></label>
+            <label class="field field-check"><input id="site-active" type="checkbox"> Active</label>
+            <div class="form-actions">
+              <button type="submit" class="button button-primary">Save general</button>
+              <span id="general-note" class="form-note" role="status"></span>
+            </div>
+          </form>
+        </div>
+
+        <div class="card">
+          <div class="card-header"><h2 class="card-title">Tracking</h2></div>
+          <div class="card-body">
+            <p class="muted">Add this snippet to your site to collect analytics.</p>
+            <pre id="snippet" class="snippet"></pre>
+            <div class="form-actions">
+              <button id="copy-snippet" type="button" class="button button-secondary">Copy snippet</button>
+              <span id="snippet-note" class="form-note" role="status"></span>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header"><h2 class="card-title">Domains</h2></div>
+          <div class="card-body">
+            <div id="domain-list" class="domain-list"></div>
+            <form id="domain-form" class="inline-form">
+              <label class="field">Hostname<input id="domain-hostname" placeholder="example.com" required></label>
+              <label class="field">Kind
+                <select id="domain-kind">
+                  <option value="alias">alias</option>
+                  <option value="primary">primary</option>
+                </select>
+              </label>
+              <button type="submit" class="button button-secondary">Add domain</button>
+            </form>
+            <p id="domain-note" class="form-note" role="status"></p>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header"><h2 class="card-title">Privacy &amp; retention</h2></div>
+          <form id="privacy-form" class="card-body form-grid">
+            <label class="field field-check"><input id="site-dnt" type="checkbox"> Respect Do Not Track</label>
+            <label class="field field-check"><input id="site-gpc" type="checkbox"> Respect Global Privacy Control</label>
+            <label class="field">Raw retention (days)<input id="site-retention" type="number" min="1" max="3650"></label>
+            <div class="form-actions">
+              <button type="submit" class="button button-primary">Save privacy</button>
+              <span id="privacy-note" class="form-note" role="status"></span>
+            </div>
+          </form>
+        </div>
+
+        <div class="card">
+          <div class="card-header"><h2 class="card-title">Access</h2></div>
+          <div class="card-body">
+            <div id="member-list" class="member-list"></div>
+            <form id="member-form" class="inline-form">
+              <label class="field">CFLab user ID<input id="member-user" placeholder="user id" required></label>
+              <label class="field">Role
+                <select id="member-role">
+                  <option value="viewer">viewer</option>
+                  <option value="editor">editor</option>
+                  <option value="owner">owner</option>
+                </select>
+              </label>
+              <button type="submit" class="button button-secondary">Save member</button>
+            </form>
+            <p id="member-note" class="form-note" role="status"></p>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<dialog id="new-site-dialog" class="dialog">
+  <form id="new-site-form" class="dialog-form">
+    <h2 class="card-title">Add site</h2>
+    <label class="field">Name<input id="new-site-name" maxlength="100" required></label>
+    <label class="field">Primary domain<input id="new-site-domain" placeholder="example.com"></label>
+    <label class="field">Timezone<input id="new-site-timezone" value="UTC" placeholder="America/Indiana/Indianapolis"></label>
+    <p id="new-site-error" class="form-error" role="alert"></p>
+    <div class="form-actions">
+      <button type="submit" class="button button-primary">Create site</button>
+      <button type="button" id="new-site-cancel" class="button button-ghost">Cancel</button>
+    </div>
+  </form>
+</dialog>
+
+<script src="/vendor/chart.umd.js" defer></script>
+<script type="module" src="/analytics.js"></script>
+</body>
+</html>

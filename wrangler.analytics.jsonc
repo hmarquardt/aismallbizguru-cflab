@@ -1,0 +1,32 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "cflab-analytics",
+  "main": "src/analytics/index.ts",
+  "compatibility_date": "2026-09-18",
+  "compatibility_flags": ["nodejs_compat"],
+  "account_id": "b1aa310aa0a1638d72b8b086a21e557c",
+  "workers_dev": false,
+  "preview_urls": false,
+  "routes": [
+    { "pattern": "analytics.aismallbizguru.com", "custom_domain": true },
+    { "pattern": "lab.aismallbizguru.com/api/analytics/collect*", "zone_name": "aismallbizguru.com" },
+    { "pattern": "cflab.aismallbizguru.com/api/analytics/collect*", "zone_name": "aismallbizguru.com" }
+  ],
+  "assets": { "directory": "./analytics-ui", "run_worker_first": ["/collect", "/api/*"] },
+  "observability": { "enabled": true, "logs": { "invocation_logs": false } },
+  "d1_databases": [{
+    "binding": "ANALYTICS",
+    "database_name": "cflab-analytics",
+    "database_id": "54e8af8e-3345-40e7-88fd-462a688421b5",
+    "migrations_dir": "migrations-analytics"
+  }],
+  "services": [{
+    "binding": "CFLAB",
+    "service": "cflab",
+    "entrypoint": "HumanAuthService"
+  }],
+  "ratelimits": [
+    { "name": "RL_ANALYTICS", "namespace_id": "4201", "simple": { "limit": 120, "period": 60 } }
+  ],
+  "triggers": { "crons": ["17 * * * *"] }
+}

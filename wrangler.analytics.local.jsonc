@@ -1,0 +1,25 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "cflab-analytics",
+  "main": "src/analytics/index.ts",
+  "compatibility_date": "2026-09-18",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "preview_urls": false,
+  "assets": { "directory": "./analytics-ui", "run_worker_first": ["/collect", "/api/*"] },
+  "d1_databases": [{
+    "binding": "ANALYTICS",
+    "database_name": "cflab-analytics",
+    "database_id": "00000000-0000-0000-0000-000000000001",
+    "migrations_dir": "migrations-analytics"
+  }],
+  "services": [{
+    "binding": "CFLAB",
+    "service": "cflab",
+    "entrypoint": "HumanAuthService"
+  }],
+  "ratelimits": [
+    { "name": "RL_ANALYTICS", "namespace_id": "4201", "simple": { "limit": 120, "period": 60 } }
+  ],
+  "triggers": { "crons": ["17 * * * *"] }
+}

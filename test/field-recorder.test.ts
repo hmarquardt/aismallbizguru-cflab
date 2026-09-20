@@ -122,6 +122,21 @@ describe('Field Recorder backend support', () => {
     expect((await call(`${records}/${recordId}`, 'DELETE', undefined, writer)).status).toBe(204);
     expect((await call(`${records}/${recordId}/files`, 'GET', undefined, writer)).status).toBe(404);
   });
+  it('allows the Field Recorder upload headers through CORS preflight', async () => {
+    const writer = await login('writer@example.com').catch(() => null);
+    void writer;
+    await createUser('writer@example.com', { membership: 'write' });
+    const response = await call('/api/apps/wildlife-field-recorder/files', 'OPTIONS', undefined, null, {
+      Origin: 'https://hmarquardt.github.io',
+      'Access-Control-Request-Method': 'POST',
+      'Access-Control-Request-Headers': 'authorization, content-type, x-filename, x-file-id, x-record-id, x-resource',
+    });
+    expect(response.status).toBe(204);
+    expect(response.headers.get('Access-Control-Allow-Origin')).toBe('https://hmarquardt.github.io');
+    expect(response.headers.get('Access-Control-Allow-Headers')).toContain('x-file-id');
+    expect(response.headers.get('Access-Control-Allow-Headers')).toContain('x-record-id');
+    expect(response.headers.get('Access-Control-Allow-Headers')).toContain('x-resource');
+  });
   it('enforces write membership for recorder mutations', async () => {
     const records = '/api/apps/wildlife-field-recorder/resources/observations/records';
     await createUser('reader@example.com', { membership: 'read' });

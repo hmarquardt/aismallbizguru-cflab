@@ -11,7 +11,7 @@ import { publicSafari } from './routes/public-safari';
 import { accountPage, forgotPage, loginPage, resetPage, usersPage } from './ui';
 
 const methods = ['GET', 'POST', 'PATCH', 'DELETE'];
-const allowedHeaders = ['authorization', 'content-type', 'x-filename'];
+const allowedHeaders = ['authorization', 'content-type', 'x-filename', 'x-file-id', 'x-record-id', 'x-resource'];
 const csp = "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
 function html(body: string): Response {
   return new Response(body, { headers: { 'Content-Type': 'text/html; charset=utf-8', 'Content-Security-Policy': csp } });

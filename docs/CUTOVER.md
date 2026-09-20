@@ -4,7 +4,7 @@
 
 Verification after cutover: health, 404 behavior, human login/`me`/logout, wildlife observation/trip/file reads, a create-update-archive cycle, Safari public observations and photos, Top Hat Ferals public sightings, and the analytics collector all passed through `lab.`. Browser page loads of existing Junk Drawer pages sent collector requests to `lab.` and landed rows in `cflab-analytics`; DNT suppression was re-verified (zero requests). No VM traffic is required.
 
-The legacy VM is operationally obsolete and safe to stop. It has not been stopped because VM control is unavailable from this environment. Do not delete it until a subsequent explicit instruction; historical analytics remains the only unresolved archival item.
+The legacy VM was stopped on 2026-09-20 and is operationally obsolete. Both hostnames and all clients were re-checked healthy after shutdown. Do not delete the VM until the historical analytics archival decision is made; the encrypted Restic repository is the remaining archive.
 
 ## Current state
 

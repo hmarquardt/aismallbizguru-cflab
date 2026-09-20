@@ -11,6 +11,11 @@ function clientPath(): string | null {
 }
 const path = clientPath();
 const html = path ? readFileSync(path, 'utf8') : '';
+function extract(name: string): string {
+  const match = new RegExp(`(?:async\\s+)?function ${name}\\([^)]*\\) \\{[\\s\\S]*?\\n\\}`).exec(html);
+  assert.ok(match, `${name} not found in client`);
+  return match[0];
+}
 
 test('Field Recorder uses CFLab human sessions with no shared bearer token', { skip: !path }, () => {
   assert.match(html, /cflab\.aismallbizguru\.com/);
@@ -43,4 +48,13 @@ test('Field Recorder reads are fully paginated and cached collections survive fa
   assert.match(html, /fetchCompleteCollection/);
   assert.match(html, /fetchRecordFiles/);
   assert.match(html, /pending captures are kept locally/i);
+});
+
+
+test('Field Recorder encodes upload filenames for header safety', { skip: !path }, () => {
+  const encodeUploadFilename = new Function(`${extract('encodeUploadFilename')}; return encodeUploadFilename;`)() as (name: string) => string;
+  const encoded = encodeUploadFilename('Screenshot 2026-09-20 at 11.38.07 AM.png');
+  assert.match(encoded, /^utf8:[\x20-\x7e]*$/);
+  assert.equal(decodeURIComponent(encoded.slice(5)), 'Screenshot 2026-09-20 at 11.38.07 AM.png');
+  assert.match(html, /encodeUploadFilename\(\(photo\.originalFilename \|\| 'photo'\) \+ ext\)/);
 });

@@ -1,12 +1,30 @@
 import { Hono } from 'hono';
 import type { ContextEnv } from '../types';
 import { requireScope } from '../auth/tokens';
-import { ApiError, id, page, readLimited, slug, string } from '../http';
+import { ApiError, id, page, readLimited, slug } from '../http';
 
 export interface FileRow {
   id: string; app_id: string; object_key: string; filename: string;
   content_type: string; size_bytes: number; checksum: string | null; created_at: string;
   resource: string | null; record_id: string | null;
+}
+const FILENAME_MAX = 200;
+const FILENAME_HEADER_MAX = 4096;
+// Accepts legacy plain header-safe filenames and the client `utf8:` percent-encoded
+// convention used for Unicode browser filenames. Plain values are never decoded, so a
+// legitimate `%` in a legacy filename stays literal.
+function uploadFilename(raw: string | undefined): string {
+  if (raw === undefined || raw === '') return 'download';
+  if (raw.length > FILENAME_HEADER_MAX) throw new ApiError(400, 'invalid_filename', 'Filename too long');
+  let value = raw;
+  if (value.startsWith('utf8:')) {
+    try { value = decodeURIComponent(value.slice(5)); }
+    catch { throw new ApiError(400, 'invalid_filename', 'Invalid encoded filename'); }
+  }
+  if (!value.trim() || /[\x00-\x1f\x7f]/.test(value) || Array.from(value).length > FILENAME_MAX) {
+    throw new ApiError(400, 'invalid_filename', 'Invalid filename');
+  }
+  return value;
 }
 export function fileOutput(row: FileRow) {
   const { object_key: _key, ...rest } = row;
@@ -15,7 +33,7 @@ export function fileOutput(row: FileRow) {
 export const files = new Hono<ContextEnv>();
 files.use('*', async (c, next) => { if (c.req.param('id')) id(c.req.param('id')); await next(); });
 files.post('/', requireScope('files:write'), async c => {
-  const filename = string(c.req.header('X-Filename') ?? 'download', 'filename', 200);
+  const filename = uploadFilename(c.req.header('X-Filename'));
   const contentType = c.req.header('Content-Type') ?? 'application/octet-stream';
   if (!/^[a-zA-Z0-9!#$&^_.+-]+\/[a-zA-Z0-9!#$&^_.+-]+$/.test(contentType) || contentType.length > 128) {
     throw new ApiError(400, 'invalid_input', 'Expected a MIME type without parameters');

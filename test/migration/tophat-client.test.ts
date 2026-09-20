@@ -163,3 +163,14 @@ test('manage edit preserves unknown fields and uploads stay linked', { skip: !pa
   assert.doesNotMatch(html, /updateRecordPhotoUrl/);
   assert.match(html, /Archive this sighting\? It will disappear from the public site\. Linked files are kept\./);
 });
+
+
+test('client encodes Unicode filenames as ASCII-safe utf8 headers and uses them for uploads', { skip: !path }, () => {
+  const encodeUploadFilename = new Function(`${extract('encodeUploadFilename')}; return encodeUploadFilename;`)() as (name: string) => string;
+  for (const name of ['cat.jpg', 'Screenshot 2026-09-20 at 11.38.07 AM.png', 'café.png', '猫.png', '100% cat.png', 'quote"name.png']) {
+    const encoded = encodeUploadFilename(name);
+    assert.match(encoded, /^utf8:[\x20-\x7e]*$/);
+    assert.equal(decodeURIComponent(encoded.slice(5)), name);
+  }
+  assert.match(html, /"X-Filename": encodeUploadFilename\(file\.name \|\| "upload"\)/);
+});

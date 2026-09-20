@@ -298,3 +298,52 @@ describe('JunkStats dashboard origin and admin API', () => {
     expect((await call(`/api/analytics/summary?site_id=junkdrawer&from=${from}&to=${to}`, 'GET', undefined, nonAdminToken, { Origin: dashboardOrigin })).status).toBe(403);
   });
 });
+
+describe('upload filename encoding', () => {
+  const filesPath = '/api/apps/top-hat-ferals/files';
+  let token = '';
+  beforeEach(async () => {
+    const now = new Date().toISOString();
+    await bindings.DB.prepare('INSERT INTO users (id, email, password_hash, active, is_admin, created_at, updated_at) VALUES (?, ?, ?, 1, 1, ?, ?)')
+      .bind(crypto.randomUUID(), 'filename-admin@example.com', await hashPassword(password), now, now).run();
+    token = (await (await call('/api/auth/login', 'POST', { email: 'filename-admin@example.com', password })).json<{ token: string }>()).token;
+  });
+  async function upload(headerName: string, fileId: string, bytes = new Uint8Array([1, 2, 3, 4])) {
+    return await local.fetch(new Request(`http://localhost${filesPath}`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'image/png', 'X-Filename': headerName, 'X-File-Id': fileId, 'X-Record-Id': topHatSightingId, 'X-Resource': 'sightings' },
+      body: bytes,
+    }), testEnv);
+  }
+  const encoded = (name: string) => 'utf8:' + encodeURIComponent(name);
+  it.each([
+    ['cat.jpg', 'cat.jpg'],
+    [encoded('Screenshot 2026-09-20 at 11.38.07 AM.png'), 'Screenshot 2026-09-20 at 11.38.07 AM.png'],
+    [encoded('café.png'), 'café.png'],
+    [encoded('猫.png'), '猫.png'],
+    [encoded('100% cat.png'), '100% cat.png'],
+    [encoded('quote"name.png'), 'quote"name.png'],
+  ])('accepts %s and stores %s', async (headerName, expected) => {
+    const fileId = crypto.randomUUID();
+    const response = await upload(headerName, fileId);
+    expect(response.status).toBe(201);
+    const row = await bindings.DB.prepare('SELECT filename FROM files WHERE id = ?').bind(fileId).first<{ filename: string }>();
+    expect(row?.filename).toBe(expected);
+    expect(await bindings.FILES.get(`apps/top-hat-ferals/files/${fileId}`)).not.toBeNull();
+    const publicImage = await call(`/api/public/top-hat-ferals/files/${fileId}`);
+    expect(publicImage.status).toBe(200);
+    expect(publicImage.headers.get('Content-Type')).toBe('image/png');
+    const download = await call(`/api/apps/top-hat-ferals/files/${fileId}/content`, 'GET', undefined, token);
+    expect(download.headers.get('Content-Disposition')).toContain("filename*=UTF-8''");
+  });
+  it('keeps legacy plain percent filenames literal and rejects malformed encodings', async () => {
+    const literalId = crypto.randomUUID();
+    expect((await upload('100% cat.png', literalId)).status).toBe(201);
+    expect((await bindings.DB.prepare('SELECT filename FROM files WHERE id = ?').bind(literalId).first<{ filename: string }>())?.filename).toBe('100% cat.png');
+    for (const bad of ['utf8:%E0%A4%A', encoded('bad\nname'), encoded('a'.repeat(201)), 'utf8:']) {
+      const response = await upload(bad, crypto.randomUUID());
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({ error: { code: 'invalid_filename' } });
+    }
+  });
+});

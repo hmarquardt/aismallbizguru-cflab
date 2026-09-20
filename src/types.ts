@@ -6,6 +6,7 @@ export interface RateLimitBinding {
 }
 export interface Bindings {
   DB: D1Database;
+  ANALYTICS: D1Database;
   FILES: R2Bucket;
   PROXY_ALLOWED_HOSTS: string;
   PROXY_SECRETS?: string;
@@ -13,6 +14,7 @@ export interface Bindings {
   RL_LOGIN?: RateLimitBinding;
   RL_RECOVERY?: RateLimitBinding;
   RL_RESET?: RateLimitBinding;
+  RL_ANALYTICS?: RateLimitBinding;
   AUTH_FROM_EMAIL?: string;
   AUTH_PUBLIC_BASE_URL?: string;
   AUTH_SESSION_TTL_SECONDS?: string;

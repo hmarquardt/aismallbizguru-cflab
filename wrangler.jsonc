@@ -20,13 +20,19 @@
   "ratelimits": [
     { "name": "RL_LOGIN", "namespace_id": "4101", "simple": { "limit": 10, "period": 60 } },
     { "name": "RL_RECOVERY", "namespace_id": "4102", "simple": { "limit": 5, "period": 60 } },
-    { "name": "RL_RESET", "namespace_id": "4103", "simple": { "limit": 10, "period": 60 } }
+    { "name": "RL_RESET", "namespace_id": "4103", "simple": { "limit": 10, "period": 60 } },
+    { "name": "RL_ANALYTICS", "namespace_id": "4104", "simple": { "limit": 120, "period": 60 } }
   ],
   "d1_databases": [{
     "binding": "DB",
     "database_name": "cflab",
     "database_id": "cb2d2eb4-2817-4581-8e50-d69212650adf",
     "migrations_dir": "migrations"
+  }, {
+    "binding": "ANALYTICS",
+    "database_name": "cflab-analytics",
+    "database_id": "54e8af8e-3345-40e7-88fd-462a688421b5",
+    "migrations_dir": "migrations-analytics"
   }],
   "r2_buckets": [{ "binding": "FILES", "bucket_name": "cflab-files" }]
 }

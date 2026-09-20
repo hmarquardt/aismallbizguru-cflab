@@ -6,6 +6,7 @@ export default defineConfig({
     wrangler: { configPath: './wrangler.jsonc' },
     miniflare: { bindings: {
       TEST_MIGRATIONS: await readD1Migrations('./migrations'),
+      TEST_ANALYTICS_MIGRATIONS: await readD1Migrations('./migrations-analytics'),
       PROXY_ALLOWED_HOSTS: 'api.open-meteo.com',
     } },
   })],

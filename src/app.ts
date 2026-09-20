@@ -8,6 +8,8 @@ import { records } from './routes/records';
 import { files } from './routes/files';
 import { proxy } from './routes/proxy';
 import { publicSafari } from './routes/public-safari';
+import { analytics } from './routes/analytics';
+import { publicTopHat } from './routes/public-top-hat';
 import { accountPage, forgotPage, loginPage, resetPage, usersPage } from './ui';
 
 const methods = ['GET', 'POST', 'PATCH', 'DELETE'];
@@ -43,6 +45,8 @@ export function createApp(adminAuth: MiddlewareHandler<ContextEnv>) {
   app.use('/api/auth/*', authCors);
   app.route('/api/auth', auth);
   app.route('/api/public/wildlife-safari', publicSafari);
+  app.route('/api/public/top-hat-ferals', publicTopHat);
+  app.route('/api/analytics', analytics);
   app.use('/api/admin/*', adminAuth);
   app.route('/api/admin', admin);
   app.get('/admin', c => c.redirect('/admin/users'));

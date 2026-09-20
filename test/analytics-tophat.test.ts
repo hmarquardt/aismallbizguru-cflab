@@ -222,3 +222,55 @@ describe('Top Hat Ferals origin registration and CORS', () => {
     expect(upload.headers.get('Access-Control-Allow-Origin')).toBe('https://www.tophatferals.com');
   });
 });
+
+describe('JunkStats dashboard origin and admin API', () => {
+  const dashboardOrigin = 'https://hmarquardt.github.io';
+  async function createAdmin(email: string, isAdmin: boolean) {
+    const now = new Date().toISOString();
+    const userId = crypto.randomUUID();
+    await bindings.DB.prepare('INSERT INTO users (id, email, password_hash, active, is_admin, created_at, updated_at) VALUES (?, ?, ?, 1, ?, ?, ?)')
+      .bind(userId, email, await hashPassword(password), isAdmin ? 1 : 0, now, now).run();
+    const login = await call('/api/auth/login', 'POST', { email, password }, null, { Origin: dashboardOrigin });
+    expect(login.status).toBe(200);
+    return (await login.json<{ token: string }>()).token;
+  }
+  beforeEach(async () => {
+    await bindings.DB.batch([
+      bindings.DB.prepare("INSERT OR IGNORE INTO apps (id, name, active, config_json, created_at, updated_at) VALUES ('junkstats-dashboard', 'JunkStats Dashboard', 1, '{}', datetime('now'), datetime('now'))"),
+      bindings.DB.prepare("INSERT OR IGNORE INTO app_origins (app_id, origin) VALUES ('junkstats-dashboard', 'https://hmarquardt.github.io')"),
+      bindings.DB.prepare("INSERT OR IGNORE INTO app_origins (app_id, origin) VALUES ('junkstats-dashboard', 'https://hmarquardt.github.io')"),
+    ]);
+  });
+  it('registers the dashboard app origin idempotently and ships the seed in a migration', async () => {
+    const { results } = await bindings.DB.prepare("SELECT origin FROM app_origins WHERE app_id = 'junkstats-dashboard'").all<{ origin: string }>();
+    expect(results).toEqual([{ origin: dashboardOrigin }]);
+  });
+  it('allows dashboard-origin auth and rejects wrong credentials and unrelated origins', async () => {
+    const now = new Date().toISOString();
+    await bindings.DB.prepare('INSERT INTO users (id, email, password_hash, active, is_admin, created_at, updated_at) VALUES (?, ?, ?, 1, 1, ?, ?)')
+      .bind(crypto.randomUUID(), 'dash-admin@example.com', await hashPassword(password), now, now).run();
+    const preflight = await call('/api/auth/login', 'OPTIONS', undefined, null, { Origin: dashboardOrigin, 'Access-Control-Request-Method': 'POST', 'Access-Control-Request-Headers': 'content-type' });
+    expect(preflight.status).toBe(204);
+    expect(preflight.headers.get('Access-Control-Allow-Origin')).toBe(dashboardOrigin);
+    expect(preflight.headers.get('Access-Control-Allow-Methods')).toContain('POST');
+    const login = await call('/api/auth/login', 'POST', { email: 'dash-admin@example.com', password }, null, { Origin: dashboardOrigin });
+    expect(login.status).toBe(200);
+    expect(login.headers.get('Access-Control-Allow-Origin')).toBe(dashboardOrigin);
+    const token = (await login.json<{ token: string }>()).token;
+    expect((await call('/api/auth/me', 'GET', undefined, token, { Origin: dashboardOrigin })).status).toBe(200);
+    expect((await call('/api/auth/login', 'POST', { email: 'dash-admin@example.com', password: 'wrong password here' }, null, { Origin: dashboardOrigin })).status).toBe(401);
+    expect((await call('/api/auth/login', 'POST', { email: 'dash-admin@example.com', password }, null, { Origin: 'https://evil.example' })).status).toBe(403);
+  });
+  it('serves all five analytics panels to an admin session from the dashboard origin and denies non-admins', async () => {
+    const adminToken = await createAdmin('dash-admin@example.com', true);
+    const from = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
+    const to = new Date().toISOString().slice(0, 10);
+    for (const path of ['summary', 'timeseries', 'pages', 'referrers', 'recent']) {
+      const response = await call(`/api/analytics/${path}?site_id=junkdrawer&from=${from}&to=${to}`, 'GET', undefined, adminToken, { Origin: dashboardOrigin });
+      expect(response.status).toBe(200);
+      expect(response.headers.get('Access-Control-Allow-Origin')).toBe(dashboardOrigin);
+    }
+    const nonAdminToken = await createAdmin('dash-viewer@example.com', false);
+    expect((await call(`/api/analytics/summary?site_id=junkdrawer&from=${from}&to=${to}`, 'GET', undefined, nonAdminToken, { Origin: dashboardOrigin })).status).toBe(403);
+  });
+});

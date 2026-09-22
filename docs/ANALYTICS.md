@@ -46,6 +46,14 @@ Existing deployed IDs are preserved as `legacy_key`:
 
 Legacy `allowed_origins` were mapped to domains; `www.tophatferals.com` and `hmarquardt.github.io` are aliases.
 
+First-class Sites are created with `POST /api/sites` (global CFLab admin, also used by the dashboard's new-site dialog) and their hostnames with `POST /api/sites/:site/domains`. Current registration:
+
+| Site | public tracking ID | domains |
+| --- | --- | --- |
+| Fruiting Forecast | `as_Puys7BZHNPEG5lHUysxjHO` | `fruitingforecast.com` (primary), `www.fruitingforecast.com` (alias) |
+
+Fruiting Forecast was registered through Cloudflare-account-authenticated operator access to `cflab-analytics` because no browser admin session was available; the row matches what `POST /api/sites` creates (slug `fruiting-forecast`, `created_by_user_id` = the active global admin, UTC, 90-day raw retention, DNT/GPC respected). The API remains the normal path for new Sites, and a fresh database does not seed this row.
+
 ## Raw event model
 
 One table, `analytics_events`, stores pageviews (`event_kind = 'pageview'`, `event_name = 'pageview'`) and custom events (`event_kind = 'event'`). Rows carry `site_day` (calendar date in the Site timezone), the resolved `domain_id`, anonymous `session_id` (optional), pathname only, referrer host only, UTM fields, coarse browser/OS/device, Cloudflare country/region, and constrained `props_json`. `UNIQUE(site_id, event_uid)` deduplicates retried events. Indexes cover site+time, site+domain+time, site+name+time, and site+day.

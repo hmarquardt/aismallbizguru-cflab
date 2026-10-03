@@ -74,7 +74,7 @@ beforeEach(async () => {
   ]);
   // A fully populated, image-bearing observation.
   await putObservation(obsA, {
-    localId: 'a', createdAt: OBS_A_CREATED_AT, latitude: 39.123456, longitude: -86.987654,
+    localId: 'a', createdAt: OBS_A_CREATED_AT, latitude: 38.36127, longitude: -87.66491,
     subjectCommonName: 'Indigo Bunting', subjectScientificName: 'Passerina cyanea', category: 'bird',
     count: 2, summary: 'A pair singing near the edge of the woods.', transcript: 'private voice transcript',
     userNoteText: 'private field note', behavior: 'singing', habitat: 'woodland edge', tags: ['private-tag'],
@@ -85,7 +85,7 @@ beforeEach(async () => {
   // A second observation with only a photo. Under the old curation rule this
   // needed an explicit allowlist row; now it is public by definition.
   await putObservation(obsB, {
-    localId: 'b', createdAt: OBS_B_CREATED_AT, latitude: 38.999999, longitude: -87.111111,
+    localId: 'b', createdAt: OBS_B_CREATED_AT, latitude: 38.38984, longitude: -87.72116,
     subjectCommonName: 'Barred Owl', category: 'bird', summary: 'Calling from the creek bottom.',
     transcript: 'second private transcript', userNoteText: 'second private note',
   });
@@ -130,7 +130,7 @@ describe('public Safari projection visibility', () => {
       category: 'bird',
       count: 2,
       description: 'A pair singing near the edge of the woods.',
-      location: { latitude: 39.1, longitude: -87, approximate: true },
+      location: { latitude: 38.361, longitude: -87.665, approximate: true },
     });
   });
 
@@ -202,9 +202,9 @@ describe('public Safari privacy boundary', () => {
   it('never exposes exact GPS and keeps the configured approximate precision', async () => {
     const { body } = await publicObservations();
     const bunting = body.observations.find(o => o.id === obsA)!;
-    expect(bunting.location).toEqual({ latitude: 39.1, longitude: -87, approximate: true });
+    expect(bunting.location).toEqual({ latitude: 38.361, longitude: -87.665, approximate: true });
     const text = JSON.stringify(body);
-    for (const exact of ['39.123456', '-86.987654', '38.999999', '-87.111111', 'accuracyMeters', 'altitude', 'heading', 'gpsStatus', '"speed"']) {
+    for (const exact of ['38.36127', '-87.66491', '38.38984', '-87.72116', 'accuracyMeters', 'altitude', 'heading', 'gpsStatus', '"speed"']) {
       expect(text).not.toContain(exact);
     }
   });
@@ -271,6 +271,86 @@ describe('public Safari privacy boundary', () => {
     expect((await call(privatePath, {}, 'POST')).status).toBe(401);
   });
 });
+
+describe('public Safari location precision', () => {
+  // Realistic southern-Indiana road-cruise fixes. Both round to the same 0.1
+  // degree bucket, which is exactly what made the public map collapse sightings
+  // onto one point.
+  const RAW_A = { latitude: 38.36127, longitude: -87.66491 };
+  const RAW_B = { latitude: 38.38984, longitude: -87.72116 };
+
+  function locationOf(body: { observations: Array<Record<string, unknown>> }, id: string) {
+    return body.observations.find(o => o.id === id)!.location as { latitude: number; longitude: number; approximate?: boolean };
+  }
+  function decimals(value: number) {
+    return (String(value).split('.')[1] ?? '').length;
+  }
+
+  it('rounds stored full-precision coordinates to exactly three decimal places', async () => {
+    const { body } = await publicObservations();
+    expect(locationOf(body, obsA)).toEqual({ latitude: 38.361, longitude: -87.665, approximate: true });
+    expect(locationOf(body, obsB)).toEqual({ latitude: 38.39, longitude: -87.721, approximate: true });
+    for (const observation of body.observations) {
+      const location = observation.location as { latitude: number; longitude: number; approximate?: boolean } | null;
+      if (!location) continue;
+      expect(Object.keys(location).sort()).toEqual(['approximate', 'latitude', 'longitude']);
+      expect(location.approximate).toBe(true);
+      for (const value of [location.latitude, location.longitude]) {
+        expect(decimals(value)).toBeLessThanOrEqual(3);
+        // Exactly representable at the configured precision, not a truncated string.
+        expect(Math.abs(value * 1000 - Math.round(value * 1000))).toBeLessThan(1e-9);
+      }
+      expect(location.latitude).not.toBe(RAW_A.latitude);
+      expect(location.longitude).not.toBe(RAW_A.longitude);
+    }
+  });
+
+  it('never returns coordinates at raw stored precision', async () => {
+    const text = await (await call('/api/public/wildlife-safari/observations?limit=1000')).text();
+    for (const raw of [
+      String(RAW_A.latitude), String(RAW_A.longitude), String(RAW_B.latitude), String(RAW_B.longitude),
+    ]) {
+      expect(text).not.toContain(raw);
+    }
+    const { body } = await publicObservations();
+    for (const observation of body.observations) {
+      const location = observation.location as { latitude: number; longitude: number } | null;
+      if (!location) continue;
+      expect(decimals(location.latitude)).toBeLessThanOrEqual(3);
+      expect(decimals(location.longitude)).toBeLessThanOrEqual(3);
+    }
+  });
+
+  it('keeps observations distinct inside the same old 0.1-degree bucket', async () => {
+    const { body } = await publicObservations();
+    const a = locationOf(body, obsA);
+    const b = locationOf(body, obsB);
+    // Confirms the fixture is a genuine regression case: at 1 decimal place the
+    // old projection put both observations on the same public coordinate.
+    expect(Math.round(RAW_A.latitude * 10)).toBe(Math.round(RAW_B.latitude * 10));
+    expect(Math.round(RAW_A.longitude * 10)).toBe(Math.round(RAW_B.longitude * 10));
+    // At 3 decimals they stay separate.
+    expect(a.latitude).not.toBe(b.latitude);
+    expect(a.longitude).not.toBe(b.longitude);
+    expect(Math.abs(a.latitude - b.latitude)).toBeGreaterThanOrEqual(0.001);
+    expect(Math.abs(a.longitude - b.longitude)).toBeGreaterThanOrEqual(0.001);
+    const pairs = new Set(body.observations.map(o => {
+      const location = o.location as { latitude: number; longitude: number } | null;
+      return location ? `${location.latitude},${location.longitude}` : 'none';
+    }));
+    expect(pairs.size).toBe(2);
+  });
+
+  it('keeps approximate: true on every projected location', async () => {
+    const { body } = await publicObservations();
+    const withLocation = body.observations.filter(o => o.location);
+    expect(withLocation.length).toBeGreaterThan(0);
+    for (const observation of withLocation) {
+      expect((observation.location as { approximate?: boolean }).approximate).toBe(true);
+    }
+  });
+});
+
 
 describe('public Safari CORS', () => {
   it('does not emit a wildcard CORS header and rejects unlisted origins', async () => {

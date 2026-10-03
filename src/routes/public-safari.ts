@@ -16,7 +16,11 @@ import { ApiError } from '../http';
 export const SAFARI_ORIGINS = ['https://hmarquardt.github.io'];
 export const SAFARI_APP_ID = 'wildlife-field-recorder';
 export const SAFARI_RESOURCE = 'observations';
-export const SAFARI_LOCATION_DECIMALS = 1;
+// Public coordinate precision. Three decimal places is roughly a few hundred
+// feet: enough to separate sightings made along one trip on the public map,
+// while still not publishing the exact stored GPS fix. Records keep full
+// precision; rounding happens only here, in the projection.
+export const SAFARI_LOCATION_DECIMALS = 3;
 export const SAFARI_PUBLIC_FILE_PREFIX = '/api/public/wildlife-safari/files/';
 // The Safari dataset grows continuously, so the endpoint is paginated instead of
 // failing once it crosses a single hard record ceiling.

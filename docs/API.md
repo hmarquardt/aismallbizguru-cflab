@@ -210,14 +210,20 @@ For an upstream credential, configure `"secret_headers":{"Authorization":"WEATHE
 
 ## Public Safari projection
 
-Hank & Heather's Wildlife Safari uses a public, presentation-safe projection with no bearer credential:
+Hank & Heather's Wilderness Safari uses a public, presentation-safe projection with no bearer credential:
 
 | Method/path | Behavior |
 | --- | --- |
-| GET `/api/public/wildlife-safari/observations` | curated observations with allowlisted fields only |
-| GET `/api/public/wildlife-safari/files/:id` | approved image bytes for a curated record |
+| GET `/api/public/wildlife-safari/observations?limit&offset` | every submitted, non-deleted `wildlife-field-recorder` observation, allowlisted fields only |
+| GET `/api/public/wildlife-safari/files/:id` | image bytes for a file attached to a non-deleted observation |
 
-Only records explicitly listed in `safari_public_records` are returned. Responses contain species, category, `observed_at`, count, description, a coarse approximate location (one decimal degree, `approximate: true`), normalized weather, and photo references. Exact GPS, transcripts, field notes, behavior/habitat, tags, raw payloads, file metadata, R2 object keys, and tokens are never returned. Photos stream from private R2 with correct content type, inline disposition, `nosniff`, and `Cache-Control: public, max-age=3600`; arbitrary IDs are rejected and only image files linked to curated records are served. CORS echoes only the exact Safari origin (`https://hmarquardt.github.io`); it is not the security boundary. The underlying `wildlife-field-recorder` app remains private and authenticated.
+**Visibility rule:** a successfully submitted Wildlife Field Recorder observation is public automatically. There is no curation or publication step — the `records` row written by the app is the single source of truth, and deleted (`deleted_at`) records disappear immediately. `safari_public_records` is legacy schema and no longer controls Safari visibility (retained, unused; safe to drop in a later change).
+
+Responses contain species, category, `observed_at`, count, description, a coarse approximate location (one decimal degree, `approximate: true`), normalized weather, and photo references. Exact GPS, transcripts, field notes, behavior/habitat, tags, raw payloads, file metadata, R2 object keys, and tokens are never returned. Photos stream from private R2 with correct content type, inline disposition, `nosniff`, and `Cache-Control: public, max-age=3600`; arbitrary IDs are rejected and only image files attached to a non-deleted observation are served.
+
+**Pagination:** `limit` defaults to 500 and is capped at 1000; `offset` pages through the set. Each response includes `total`, `returned`, `limit`, `offset`, `has_more`, and `next_offset` (null on the last page). Ordering is by the observation capture time (`data_json.createdAt`, epoch ms) descending, with `id` as a stable tiebreaker. Clients should follow `has_more` until it is false. Malformed or out-of-range pagination values return `400`.
+
+CORS echoes only the exact Safari origin (`https://hmarquardt.github.io`); it is not the security boundary. The underlying `wildlife-field-recorder` app remains private and authenticated.
 
 ## Browser preflight
 

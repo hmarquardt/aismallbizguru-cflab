@@ -88,29 +88,23 @@ Snapshots contain GPS coordinates and sensitive wildlife data. `.migration/` is 
 | analytics | deferred | separate workstream; dashboard reads need an unavailable credential |
 | events, jobs, backup_runs, registry/schema UI, creator-token fields | discarded | no consumer or operational value in CFLab |
 
-## Safari public projection and curation
+## Safari public projection
 
-Hank & Heather's Wildlife Safari reads a public projection instead of the private wildlife app:
+Hank & Heather's Wilderness Safari reads a public projection instead of the private wildlife app:
 
 ```text
-GET /api/public/wildlife-safari/observations
+GET /api/public/wildlife-safari/observations?limit&offset
 GET /api/public/wildlife-safari/files/:id
 ```
 
-Only records explicitly listed in `safari_public_records` are exposed, and responses are constructed from an allowlist: species, category, `observed_at`, count, description, normalized weather, a coarse approximate location (one decimal degree), and photo references. Exact GPS, transcripts, field notes, behavior/habitat, tags, raw payloads, file metadata, and R2 object keys are never returned. Photos are served only when the file is an image and its record is curated.
+**Curation was removed.** Every successfully submitted Wildlife Field Recorder observation that has not been deleted is exposed automatically; a WFR submit writes the canonical `records` row and nothing else is required. Responses are constructed from an allowlist: species, category, `observed_at`, count, description, normalized weather, a coarse approximate location (one decimal degree), and photo references. Exact GPS, transcripts, field notes, behavior/habitat, tags, raw payloads, file metadata, and R2 object keys are never returned. Photos are served only when the file is an image attached to a non-deleted observation.
 
-The initial allowlist was seeded from migrated observations that have at least one image file (44 records, 63 photos). This is an explicit, rerunnable rule; operators can curate further:
+`safari_public_records` is **legacy schema**: no code reads it any more, and it no longer controls Safari visibility. It is left in place to avoid an unnecessary destructive migration; safe to drop in a later change. (Historically it held an explicit allowlist seeded from photo-bearing migrated observations; the operator seed/curate commands below are retained only as a record of that superseded process and have no effect on the public API.)
 
 ```sh
-# seed (idempotent): photo-bearing observations
-npx wrangler d1 execute DB --remote --config wrangler.jsonc --command "
-INSERT OR IGNORE INTO safari_public_records (record_id, created_at)
-SELECT DISTINCT f.record_id, datetime('now') FROM files f JOIN records r ON r.id = f.record_id
-WHERE f.app_id='wildlife-field-recorder' AND f.content_type LIKE 'image/%' AND f.record_id IS NOT NULL;"
-
-# add or remove a specific record
-npx wrangler d1 execute DB --remote --config wrangler.jsonc --command "INSERT OR IGNORE INTO safari_public_records (record_id, created_at) VALUES ('<record-id>', datetime('now'));"
-npx wrangler d1 execute DB --remote --config wrangler.jsonc --command "DELETE FROM safari_public_records WHERE record_id='<record-id>';"
+# SUPERSEDED — do not use. Retained for historical context only.
+INSERT OR IGNORE INTO safari_public_records (record_id, created_at) ...
+DELETE FROM safari_public_records WHERE record_id='<record-id>';
 ```
 
 The Safari client contains no credential. `npm run test:migration` includes a static assertion (when the sibling client checkout is present) that rejects `Authorization`/`Bearer`/`READONLY_TOKEN`, token-like literals, and any non-analytics LabBox API base.

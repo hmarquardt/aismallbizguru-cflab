@@ -3,18 +3,52 @@ import type { ContextEnv } from '../types';
 import { ApiError } from '../http';
 
 // Public, presentation-safe projection for Hank & Heather's Wildlife Safari.
-// Only records explicitly listed in safari_public_records are exposed, and only
-// allowlisted fields are constructed into the response. Raw payloads, exact GPS,
-// transcripts, notes, file metadata, and object keys are never returned.
+//
+// Visibility rule: every successfully submitted Wildlife Field Recorder
+// observation that has not been deleted is public. There is no curation or
+// publication step -- a WFR submit writes the canonical `records` row and that
+// row is the single source of truth. `safari_public_records` is legacy schema
+// and no longer controls Safari visibility.
+//
+// Only allowlisted fields are constructed into the response. Raw payloads,
+// exact GPS, transcripts, notes, file metadata, and object keys are never
+// returned.
 export const SAFARI_ORIGINS = ['https://hmarquardt.github.io'];
 export const SAFARI_APP_ID = 'wildlife-field-recorder';
 export const SAFARI_RESOURCE = 'observations';
 export const SAFARI_LOCATION_DECIMALS = 1;
 export const SAFARI_PUBLIC_FILE_PREFIX = '/api/public/wildlife-safari/files/';
-const PUBLIC_RECORD_LIMIT = 1000;
+// The Safari dataset grows continuously, so the endpoint is paginated instead of
+// failing once it crosses a single hard record ceiling.
+export const PUBLIC_PAGE_SIZE_DEFAULT = 500;
+export const PUBLIC_PAGE_SIZE_MAX = 1000;
+const PUBLIC_OFFSET_MAX = 100_000_000;
 
 interface RecordRow { id: string; data_json: string }
 interface FileRow { id: string; record_id: string; content_type: string }
+
+// Bounded, validated pagination. Out-of-range or malformed values are rejected
+// rather than silently clamped so clients cannot accidentally page forever.
+function publicPage(url: string): { limit: number; offset: number } {
+  const params = new URL(url).searchParams;
+  const rawLimit = params.get('limit');
+  const rawOffset = params.get('offset');
+  let limit = PUBLIC_PAGE_SIZE_DEFAULT;
+  if (rawLimit !== null && rawLimit !== '') {
+    if (!/^\d+$/.test(rawLimit) || Number(rawLimit) < 1 || Number(rawLimit) > PUBLIC_PAGE_SIZE_MAX) {
+      throw new ApiError(400, 'invalid_pagination', `limit must be an integer between 1 and ${PUBLIC_PAGE_SIZE_MAX}`);
+    }
+    limit = Number(rawLimit);
+  }
+  let offset = 0;
+  if (rawOffset !== null && rawOffset !== '') {
+    if (!/^\d+$/.test(rawOffset) || Number(rawOffset) > PUBLIC_OFFSET_MAX) {
+      throw new ApiError(400, 'invalid_pagination', 'offset must be a non-negative integer');
+    }
+    offset = Number(rawOffset);
+  }
+  return { limit, offset };
+}
 
 function rounded(value: number): number {
   const factor = 10 ** SAFARI_LOCATION_DECIMALS;
@@ -100,21 +134,37 @@ publicSafari.use('*', async (c, next) => {
 });
 
 publicSafari.get('/observations', async c => {
+  const { limit, offset } = publicPage(c.req.url);
+  const totalRow = await c.env.DB.prepare(
+    'SELECT COUNT(*) AS total FROM records WHERE app_id = ? AND resource = ? AND deleted_at IS NULL',
+  ).bind(SAFARI_APP_ID, SAFARI_RESOURCE).first<{ total: number }>();
+  const total = totalRow?.total ?? 0;
+  // Observation chronology: WFR stores the capture time as an epoch-millisecond
+  // `createdAt` in data_json, so order by that (with the id as a stable
+  // tiebreaker) instead of the meaningless UUID primary key.
   const { results: records } = await c.env.DB.prepare(
-    `SELECT r.id, r.data_json FROM safari_public_records s
-     JOIN records r ON r.id = s.record_id
-     WHERE r.app_id = ? AND r.resource = ? AND r.deleted_at IS NULL
-     ORDER BY r.id LIMIT ?`,
-  ).bind(SAFARI_APP_ID, SAFARI_RESOURCE, PUBLIC_RECORD_LIMIT + 1).all<RecordRow>();
-  if (records.length > PUBLIC_RECORD_LIMIT) throw new ApiError(503, 'projection_too_large', 'Public projection exceeds its configured bound');
+    `SELECT id, data_json FROM records
+     WHERE app_id = ? AND resource = ? AND deleted_at IS NULL
+     ORDER BY COALESCE(json_extract(data_json, '$.createdAt'), 0) DESC, id ASC
+     LIMIT ? OFFSET ?`,
+  ).bind(SAFARI_APP_ID, SAFARI_RESOURCE, limit, offset).all<RecordRow>();
   const ids = records.map(record => record.id);
   const filesByRecord = new Map<string, FileRow[]>();
   if (ids.length) {
-    const placeholders = ids.map(() => '?').join(',');
+    // Select the page's image files with the same bounded page subquery instead
+    // of a dynamic IN list: D1 rejects statements with too many bound
+    // parameters, which a large page would otherwise hit.
     const { results: files } = await c.env.DB.prepare(
-      `SELECT id, record_id, content_type FROM files
-       WHERE app_id = ? AND record_id IN (${placeholders}) AND content_type LIKE 'image/%'`,
-    ).bind(SAFARI_APP_ID, ...ids).all<FileRow>();
+      `WITH page AS (
+         SELECT id FROM records
+         WHERE app_id = ? AND resource = ? AND deleted_at IS NULL
+         ORDER BY COALESCE(json_extract(data_json, '$.createdAt'), 0) DESC, id ASC
+         LIMIT ? OFFSET ?
+       )
+       SELECT f.id, f.record_id, f.content_type
+       FROM files f JOIN page ON page.id = f.record_id
+       WHERE f.app_id = ? AND f.content_type LIKE 'image/%'`,
+    ).bind(SAFARI_APP_ID, SAFARI_RESOURCE, limit, offset, SAFARI_APP_ID).all<FileRow>();
     for (const file of files) {
       const list = filesByRecord.get(file.record_id) ?? [];
       list.push(file);
@@ -123,7 +173,20 @@ publicSafari.get('/observations', async c => {
   }
   const fileBaseUrl = new URL(c.req.url).origin;
   const observations = records.map(record => projectObservation(record, filesByRecord.get(record.id) ?? [], fileBaseUrl)).filter(Boolean);
-  return c.json({ observations, total: observations.length, generated_at: new Date().toISOString() });
+  // `next_offset` advances by rows scanned (not rows projected) so a record that
+  // cannot be projected can never stall a paging client.
+  const nextOffset = offset + records.length;
+  const hasMore = nextOffset < total;
+  return c.json({
+    observations,
+    total,
+    returned: observations.length,
+    limit,
+    offset,
+    has_more: hasMore,
+    next_offset: hasMore ? nextOffset : null,
+    generated_at: new Date().toISOString(),
+  });
 });
 
 publicSafari.get('/files/:id', async c => {
@@ -131,10 +194,9 @@ publicSafari.get('/files/:id', async c => {
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(fileId)) throw new ApiError(404, 'file_not_found', 'File not found');
   const row = await c.env.DB.prepare(
     `SELECT f.object_key, f.content_type FROM files f
-     JOIN safari_public_records s ON s.record_id = f.record_id
-     JOIN records r ON r.id = f.record_id AND r.app_id = f.app_id
+     JOIN records r ON r.id = f.record_id AND r.app_id = f.app_id AND r.resource = ?
      WHERE f.id = ? AND f.app_id = ? AND f.content_type LIKE 'image/%' AND r.deleted_at IS NULL`,
-  ).bind(fileId, SAFARI_APP_ID).first<{ object_key: string; content_type: string }>();
+  ).bind(SAFARI_RESOURCE, fileId, SAFARI_APP_ID).first<{ object_key: string; content_type: string }>();
   if (!row) throw new ApiError(404, 'file_not_found', 'File not found');
   const object = await c.env.FILES.get(row.object_key);
   if (!object) throw new ApiError(503, 'file_unavailable', 'File content unavailable');

@@ -545,3 +545,71 @@ describe('human-facing pages', () => {
     expect(response.headers.get('Location')).toBe('/admin/users');
   });
 });
+
+// The Wildlife Field Recorder page is served from https://hmarquardt.github.io,
+// which is a different origin from CFLab. These tests pin the origin
+// registration and the CORS behavior it depends on, and prove an unregistered
+// origin is still refused (no wildcard).
+describe('wildlife field recorder deployment origin', () => {
+  const wfrOrigin = 'https://hmarquardt.github.io';
+  // The shared beforeEach truncates apps/app_origins, so re-apply the
+  // registration migration here to exercise the migration SQL itself.
+  async function applyWildlifeOriginMigration() {
+    const migration = bindings.TEST_MIGRATIONS.find(m => m.name === '0009_wildlife_field_recorder_origin.sql');
+    expect(migration, 'migration 0009_wildlife_field_recorder_origin.sql must exist').toBeTruthy();
+    for (const query of migration!.queries) await bindings.DB.prepare(query).run();
+  }
+
+  it('registers exactly the Wildlife Field Recorder browser origin', async () => {
+    await applyWildlifeOriginMigration();
+    const { results } = await bindings.DB.prepare('SELECT origin FROM app_origins WHERE app_id = ? ORDER BY origin')
+      .bind('wildlife-field-recorder').all<{ origin: string }>();
+    expect(results.map(row => row.origin)).toEqual([wfrOrigin]);
+    const app = await bindings.DB.prepare('SELECT active FROM apps WHERE id = ?')
+      .bind('wildlife-field-recorder').first<{ active: number }>();
+    expect(app?.active).toBe(1);
+  });
+
+  it('is idempotent when the origin row already exists', async () => {
+    await applyWildlifeOriginMigration();
+    await applyWildlifeOriginMigration();
+    const { results } = await bindings.DB.prepare('SELECT origin FROM app_origins WHERE app_id = ?')
+      .bind('wildlife-field-recorder').all<{ origin: string }>();
+    expect(results).toHaveLength(1);
+  });
+
+  it('accepts the registered WFR origin on auth preflight and responses', async () => {
+    await applyWildlifeOriginMigration();
+    const preflight = await call('/api/auth/login', 'OPTIONS', undefined, null, {
+      Origin: wfrOrigin, 'Access-Control-Request-Method': 'POST', 'Access-Control-Request-Headers': 'content-type',
+    });
+    expect(preflight.status).toBe(204);
+    expect(preflight.headers.get('Access-Control-Allow-Origin')).toBe(wfrOrigin);
+    const response = await call('/api/auth/login', 'POST', { email: 'missing@example.com', password }, null, { Origin: wfrOrigin });
+    expect(response.status).toBe(401);
+    expect(response.headers.get('Access-Control-Allow-Origin')).toBe(wfrOrigin);
+  });
+
+  it('accepts the registered WFR origin on the wildlife-field-recorder app routes', async () => {
+    await applyWildlifeOriginMigration();
+    const preflight = await call('/api/apps/wildlife-field-recorder/resources/observations/records', 'OPTIONS', undefined, null, {
+      Origin: wfrOrigin, 'Access-Control-Request-Method': 'GET', 'Access-Control-Request-Headers': 'authorization',
+    });
+    expect(preflight.status).toBe(204);
+    expect(preflight.headers.get('Access-Control-Allow-Origin')).toBe(wfrOrigin);
+  });
+
+  it('still rejects an unregistered origin without a wildcard', async () => {
+    await applyWildlifeOriginMigration();
+    const authPreflight = await call('/api/auth/login', 'OPTIONS', undefined, null, {
+      Origin: 'https://not-registered.example', 'Access-Control-Request-Method': 'POST', 'Access-Control-Request-Headers': 'content-type',
+    });
+    expect(authPreflight.status).toBe(403);
+    expect(authPreflight.headers.has('Access-Control-Allow-Origin')).toBe(false);
+    const appPreflight = await call('/api/apps/wildlife-field-recorder/resources/observations/records', 'OPTIONS', undefined, null, {
+      Origin: 'https://not-registered.example', 'Access-Control-Request-Method': 'GET', 'Access-Control-Request-Headers': 'authorization',
+    });
+    expect(appPreflight.status).toBe(403);
+    expect(appPreflight.headers.has('Access-Control-Allow-Origin')).toBe(false);
+  });
+});

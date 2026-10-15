@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
 import {
   GateError, classifyMigration, classifyStatement, evaluatePending, loadApprovals,
-  parsePendingMigrations, sha256, splitStatements,
+  parseBookmark, parsePendingMigrations, sha256, splitStatements,
 } from '../../scripts/ci/migration-gate.mjs';
 
 const APPROVALS = '.github/d1-migration-approvals.json';
@@ -156,6 +156,24 @@ test('the approvals file is read strictly', () => {
   assert.deepEqual(loadApprovals('.github/d1-migration-approvals.json'), []);
   assert.throws(() => loadApprovals('README.md'), GateError);
   assert.throws(() => loadApprovals('tsconfig.json'), GateError);
+});
+
+test('a Time Travel bookmark is read from wrangler output for the recovery record', () => {
+  // Shape observed from `wrangler d1 time-travel info` on both production databases.
+  const output = [
+    'Resource location: remote ',
+    '',
+    '🚧 Time Traveling...',
+    "⚠️ The current bookmark is '000000b0-00000000-00005105-0344061f528183498866fb43434ea618'",
+    '⚡️ To restore to this specific bookmark, run:',
+    " `wrangler d1 time-travel restore DB --bookmark=000000b0-00000000-00005105-0344061f528183498866fb43434ea618`",
+  ].join('\n');
+  assert.equal(parseBookmark(output), '000000b0-00000000-00005105-0344061f528183498866fb43434ea618');
+});
+
+test('a missing bookmark is reported as unknown rather than guessed', () => {
+  assert.equal(parseBookmark('unexpected output'), null);
+  assert.equal(parseBookmark(''), null);
 });
 
 // Regression guard: every committed migration must stay additive, or carry an

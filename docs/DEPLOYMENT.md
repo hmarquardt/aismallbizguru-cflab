@@ -24,12 +24,12 @@ before the first automated release are in [CI-CD.md](CI-CD.md). The manual
 commands in this document remain the emergency path and the record of how these
 resources were created.
 
-**Read the audit blocker in
-[CI-CD.md](CI-CD.md#enabling-the-first-automated-release) before enabling
-deployment.** The currently deployed `cflab` Worker was published from a working
-tree that includes uncommitted email/invitation work, so deploying the current
-`main` would remove the `EMAIL` binding and the invitation flow from production.
-The release preflight refuses that release deliberately rather than regressing it.
+**Reconciled 2026-10-15.** The email/invitation work that production had been
+serving without a commit is now committed and was verified against the live
+deployment, so `main` and production differ only by the additive `GET
+/api/version` route. See
+[CI-CD.md](CI-CD.md#enabling-the-first-automated-release) for the release-readiness
+checklist and [CI-CD.md](CI-CD.md#d1-recovery) for the D1 recovery mechanism.
 
 ## 1. Verify account and hostname ownership
 

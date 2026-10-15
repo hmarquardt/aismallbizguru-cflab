@@ -14,6 +14,7 @@
 // Usage: node scripts/ci/verify-deployment-target.mjs [--config-only]
 
 import { existsSync, readFileSync, appendFileSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
 
 const ACCOUNT_ID = 'b1aa310aa0a1638d72b8b086a21e557c';
 const ZONE = 'aismallbizguru.com';
@@ -198,4 +199,8 @@ function main() {
   console.log(`PASS: ${checks.length} deployment-target checks passed`);
 }
 
-main();
+// Importable as a library (the release tooling reads both Wrangler configs):
+// the CLI only runs when this file is the entrypoint.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main();
+}

@@ -173,6 +173,19 @@ export function sha256(text) {
   return createHash('sha256').update(text).digest('hex');
 }
 
+// D1 Time Travel bookmarks are the recovery mechanism for a bad migration. The
+// gate records the bookmark before and after applying so an operator has the
+// exact point-in-time to restore. Reading a bookmark never changes a database.
+export function parseBookmark(output) {
+  const match = /\bcurrent bookmark is '([0-9a-fA-F-]{8,})'/i.exec(output);
+  return match ? match[1] : null;
+}
+
+function readBookmark(env, db) {
+  const result = wrangler(['d1', 'time-travel', 'info', db.name, '--config', db.config], env);
+  return result.status === 0 ? parseBookmark(result.output) : null;
+}
+
 // Decides whether the pending set may be applied without an operator. An
 // approval only counts when it names the exact file content, so editing an
 // approved migration invalidates the approval.
@@ -288,6 +301,12 @@ async function main() {
       summary.push(`- ${db.label} (\`${db.name}\`): ${entries.length} additive migration(s) ready (check only)`);
       continue;
     }
+    // Record the recovery point before changing anything. This is best-effort
+    // metadata: a failed bookmark read must not block an otherwise safe release.
+    const bookmarkBefore = readBookmark(env, db);
+    console.log(bookmarkBefore
+      ? `BOOKMARK ${db.name} before applying: ${bookmarkBefore}`
+      : `WARN  ${db.name}: no Time Travel bookmark was reported before applying`);
     const applied = wrangler(['d1', 'migrations', 'apply', db.name, '--remote', '--config', db.config], env);
     if (applied.status !== 0) throw new GateError(`Applying migrations for ${db.label} (${db.name}) failed:\n${applied.output.trim()}`);
     const after = wrangler(['d1', 'migrations', 'list', db.name, '--remote', '--config', db.config], env);
@@ -295,8 +314,13 @@ async function main() {
     const remaining = parsePendingMigrations(after.output);
     if (remaining.length) throw new GateError(`Migrations are still pending for ${db.label} (${db.name}) after applying: ${remaining.join(', ')}`);
     const approvedCount = entries.filter(entry => entry.approved).length;
+    const bookmarkAfter = readBookmark(env, db);
     console.log(`OK    ${db.label} (${db.name}): applied ${entries.length} migration(s)${approvedCount ? ` (${approvedCount} with an operator approval)` : ''} and confirmed none remain pending`);
+    if (bookmarkAfter) console.log(`BOOKMARK ${db.name} after applying: ${bookmarkAfter}`);
     summary.push(`- ${db.label} (\`${db.name}\`): applied ${entries.length} migration(s)${approvedCount ? ` (${approvedCount} approved)` : ''}: ${entries.map(entry => entry.file).join(', ')}`);
+    summary.push(bookmarkBefore
+      ? `  - pre-migration Time Travel bookmark: \`${bookmarkBefore}\` (undo with \`npx wrangler d1 time-travel restore ${db.name} --config ${db.config} --bookmark=${bookmarkBefore}\`)`
+      : '  - no pre-migration Time Travel bookmark was reported; check the Cloudflare dashboard before relying on a restore');
   }
   writeSummary(summary);
 }

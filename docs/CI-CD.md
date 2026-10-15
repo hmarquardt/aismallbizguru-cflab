@@ -238,28 +238,26 @@ intended release is live".
 
 Do this only after the blocking item below is resolved.
 
-> **Blocker before the first automated release (audited 2026-10-15).** The
-> currently deployed `cflab` Worker was published from a working tree that
-> contains changes which are **not committed to `main`** (the transactional-email
-> and invitation work: `src/auth/email/`, the `EMAIL` `send_email` binding,
-> `AUTH_FROM_EMAIL`/`AUTH_FROM_NAME`/`AUTH_INVITE_TTL_SECONDS`, the `RL_INVITE`
-> rate limit, migration `0010_auth_email_invitations.sql`, and their docs/tests).
-> Migration `0010` is already applied in the remote `cflab` database, and the
-> deployed Worker answers with the new invitation error text. Deploying the
-> current `main` would therefore **remove** the `EMAIL` binding, `RL_INVITE`, and
-> the invitation code from production. `scripts/ci/verify-deployment-target.mjs`
-> detects exactly this and refuses to release (it fails on
-> `vars.AUTH_FROM_EMAIL` and the rate-limit set), so the gate cannot be bypassed
-> by accident. Commit and review that work first, then enable deployment.
+> **Reconciliation status (2026-10-15).** The drift found during the Phase 1
+> audit is resolved. The transactional-email and invitation work that production
+> has been serving since 2026-10-06 (Worker version 19) is committed as
+> `9dad7ba`, together with migration `0010_auth_email_invitations.sql`, which was
+> already applied in the remote `cflab` database. `main` is now ahead of
+> production only by the additive `GET /api/version` route introduced with this
+> pipeline, which the first release publishes. Everything else was verified to
+> match the live deployment before committing (deployed bindings, byte-identical
+> pages, invite-token behaviour, migration state); the method and the remaining
+> differences are recorded in [Known limitations and drift](#known-limitations-and-drift).
 
-1. Commit and review the in-flight email/invitation work so `main` matches what
-   production is already running, and confirm `npm run check` passes on `main`.
+1. Confirm the reconciled state on `main`: `npm run check` passes, and
+   `node scripts/ci/verify-deployment-target.mjs --config-only` prints
+   `PASS: 30 deployment-target checks passed`.
 2. Confirm the repository variable `CLOUDFLARE_DEPLOY_ENABLED` is `false` and both
    secrets exist.
-3. Merge the release pipeline. The `validate` job must pass on `main`.
-4. Verify the preflight locally against the committed tree:
-   `node scripts/ci/verify-deployment-target.mjs --config-only` (with the current
-   configuration it must print `PASS: 30 deployment-target checks passed`).
+3. Confirm the release pipeline's `validate` job passes on `main`.
+4. Confirm the recovery mechanism is usable — both databases must answer
+   `npx wrangler d1 time-travel info <DB>` with a bookmark (see
+   [D1 recovery](#d1-recovery)).
 5. Confirm the remote migration state is fully applied — both databases must
    report no pending migrations:
 
@@ -281,6 +279,44 @@ Do this only after the blocking item below is resolved.
 Set the repository variable `CLOUDFLARE_DEPLOY_ENABLED` to `false` (or delete it).
 The deploy job then skips and only validation runs. This is the immediate stop
 switch and needs no code change; an already-running release is not cancelled.
+
+## D1 recovery
+
+D1 **Time Travel** is the recovery mechanism for a bad migration or a mistaken
+write. It is always on, costs nothing, and is available on both CFLab databases —
+verified 2026-10-15 with `wrangler d1 time-travel info`, which returned a bookmark
+for `DB` (`cflab`, 12 tables, 12 MB) and `ANALYTICS` (`cflab-analytics`, 16
+tables, 692 kB). Retention is **30 days** on the Workers Paid plan (7 days on
+Free); bookmarks older than the window cannot be used.
+
+```sh
+# Read-only: show the current bookmark (or the bookmark for a past moment)
+npx wrangler d1 time-travel info DB --config wrangler.jsonc
+npx wrangler d1 time-travel info DB --config wrangler.jsonc --timestamp=1780000000
+npx wrangler d1 time-travel info ANALYTICS --config wrangler.analytics.jsonc
+
+# Destructive: restore the database in place to that point in time
+npx wrangler d1 time-travel restore DB --config wrangler.jsonc --bookmark=<bookmark>
+npx wrangler d1 time-travel restore ANALYTICS --config wrangler.analytics.jsonc --bookmark=<bookmark>
+```
+
+* `d1 time-travel info` takes no `--remote` flag; it always acts on the remote
+  database. It changes nothing.
+* A restore **overwrites the database in place** and cancels in-flight queries.
+  It prints the previous bookmark, which is the undo path, and it does not remove
+  older bookmarks, so a restore is itself reversible.
+* The migration gate records the pre-migration bookmark (and the post-apply one)
+  in the run summary whenever it applies migrations, so the exact undo point is
+  recorded with the release. A bookmark that cannot be read is reported as a
+  warning rather than silently omitted; it never blocks an otherwise safe release.
+* `npx wrangler d1 export DB --remote --output backup.sql` produces a logical SQL
+  dump (add `--table` to scope it, `--no-data`/`--no-schema` to split it). Keep
+  dumps outside the repository; they contain production data.
+* The legacy snapshot backup API (`wrangler d1 backup …`, hourly, 24-hour
+  retention) applies only to `version: alpha` databases. Time Travel is the
+  mechanism for these databases.
+* Restoring data is always a deliberate operator action. No workflow, migration,
+  or script in this repository restores, drops, truncates, or seeds a database.
 
 ## Rollback
 
@@ -345,11 +381,19 @@ release history.
 
 ## Known limitations and drift
 
-* **`main` can be behind production** until the blocker above is resolved. The
-  audit found one such case; the preflight now detects it.
-* **Remote-only migrations are invisible.** `wrangler d1 migrations list` reports
-  local files that are not applied remotely; it cannot report a migration applied
-  remotely that is absent from the repository. Keep migration files committed.
+* **Source and production are reconciled (2026-10-15).** The email/invitation work
+  is committed (`9dad7ba`) and matches the live deployment; `main` is ahead of
+  production only by the additive `GET /api/version` route, so the first release
+  publishes that route and nothing else changes behaviorally. Verification used
+  four independent read-only methods: (1) the deployed version's bindings and
+  vars read through `wrangler versions view` match `wrangler.jsonc` in all 16
+  entries; (2) all five server-rendered pages (`/admin/login`, `/admin/users`,
+  `/account`, `/forgot-password`, `/reset-password`) are byte-identical to this
+  source; (3) an invite-purpose (`cfri_`) token is rejected with the new message;
+  (4) both databases report no pending migrations. The deployed script's `etag`
+  could not be used for byte-level proof: it is not reproducible from a locally
+  built bundle even for the unchanged Analytics Worker, so it is not a source
+  digest.
 * **Two verification probes depend on production data**: the public projections
   require the `wildlife-field-recorder` and `top-hat-ferals` apps to exist, and
   the protected-app probe uses `/api/apps/wildlife-field-recorder`. If those apps
@@ -358,5 +402,6 @@ release history.
 * **The legacy CFLab collector still serves `POST /api/analytics/collect`** if the
   Analytics zone routes are removed; the collect-route checks would then report a
   `status` failure rather than silently accepting the fallback.
-* **Deployment stays disabled in this phase.** `CLOUDFLARE_DEPLOY_ENABLED` must
-  remain `false` until the operator performs the steps above.
+* **Deployment stays disabled until an operator enables it.** The pipeline is
+  merged and validated, but `CLOUDFLARE_DEPLOY_ENABLED` must remain `false` until
+  the steps above are completed deliberately.

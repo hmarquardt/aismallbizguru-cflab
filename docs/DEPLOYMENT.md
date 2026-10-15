@@ -76,7 +76,7 @@ For later deployments, reuse these exact CFLab resources instead of recreating t
 - Retain only the exact `cflab.aismallbizguru.com` Custom Domain; no `lab` hostname or wildcard.
 - Leave proxies disabled unless needed. For audited upstreams, set exact `PROXY_ALLOWED_HOSTS`; review the [proxy threat model](ARCHITECTURE.md#proxy-threat-model). Put credentials in `PROXY_SECRETS`, not app config or source headers.
 - Production administration is a normal human session whose user is an active administrator; there is no shared admin secret and no development bypass. The Worker can be published and health-checked before any user exists. Create the first administrator through the documented operator bootstrap in [AUTH.md](AUTH.md#first-admin-bootstrap), then manage users, memberships, and sessions through `/api/admin/*` or the minimal UI at `/admin/login`.
-- Authentication mail uses the native `send_email` binding (`EMAIL`) with `AUTH_FROM_EMAIL` and `AUTH_PUBLIC_BASE_URL`. `AUTH_FROM_EMAIL` is intentionally empty until a sending domain is onboarded in **Compute > Email Service > Email Sending > Onboard Domain**; review the bounce MX/SPF/DKIM/DMARC records that Cloudflare proposes before applying them and do not disturb existing Email Routing or the current registrar MX/SPF records. Until then, forgot-password stays generic and admin setup mail returns `503 email_unavailable`; the operator bootstrap can use a directly inserted reset token instead. Rate-limit bindings `RL_LOGIN`, `RL_RECOVERY`, and `RL_RESET` are configured in `wrangler.jsonc`.
+- Authentication mail uses Cloudflare Email Service (Email Sending) through the `EMAIL` `send_email` binding; see [Transactional email](#transactional-email). Sending requires an onboarded sending domain: CFLab sends from `noreply@mail.aismallbizguru.com`. If the binding or sender is missing, invitations and setup resends fail with `503 email_unavailable` (shown as `Invitation failed`) and forgot-password stays generic. Rate-limit bindings `RL_LOGIN`, `RL_RECOVERY`, `RL_RESET`, and `RL_INVITE` are configured in `wrangler.jsonc`.
 - The human auth system is the primary CFLab identity provider. Cloudflare Access is not required and is not part of this deployment. An initial pilot app can be provisioned through the authenticated admin API/UI, or through the narrowly scoped operator procedure in Section 5 targeting only the verified CFLab DB and storing token hashes, never plaintext tokens. Local administration only changes local D1; it does not provision deployed apps. See [pilot prerequisites](COMPATIBILITY.md#b--first-pilot-wildlife-pattern-lab-read-only).
 - Set operational ownership, abuse limits, and backup/restore policy appropriate for persistent client data. This is not disposable staging; the current MVP has no automated backup or per-client rate-limit service.
 
@@ -87,6 +87,93 @@ npx wrangler secret put PROXY_SECRETS --config wrangler.jsonc
 ```
 
 Enter the JSON secret-name/value map interactively. Without a needed secret the proxy fails closed. Read-only compatibility tokens belong in your local environment/secret manager, never in fixtures or Git.
+
+## Transactional email
+
+Invitations and password resets are sent by `src/auth/email/` using **Cloudflare Email Service → Email Sending** (beta) through the Worker `send_email` binding ([Workers API](https://developers.cloudflare.com/email-service/api/send-emails/workers-api/)). There is no third-party provider and no email secret.
+
+> **Verified-destination rule.** Before a sending domain is onboarded, the binding
+> can only send to verified destination addresses in the account. **After
+> onboarding, it can send to any recipient.** Onboarding also requires Cloudflare
+> DNS for the zone.
+
+### Required configuration
+
+| Name | Kind | Value |
+| --- | --- | --- |
+| `EMAIL` | binding (`wrangler.jsonc`) | `"send_email": [{ "name": "EMAIL" }]` |
+| `AUTH_FROM_EMAIL` | var | `noreply@mail.aismallbizguru.com`. Empty disables all auth mail. |
+| `AUTH_FROM_NAME` | var | `CFLab`. Dropped automatically if it would inject a header. |
+| `AUTH_PUBLIC_BASE_URL` | var | `https://cflab.aismallbizguru.com`. Builds setup links; never taken from the request. |
+| `AUTH_INVITE_TTL_SECONDS` | var | Invitation lifetime, default `604800` (7 days). |
+| `AUTH_RESET_TTL_SECONDS` | var | Recovery lifetime, default `1800` (30 minutes). |
+
+Email Sending requires the **Workers Paid** plan. No API key, SMTP credential, or
+`wrangler secret` is used.
+
+### Onboarding the sending domain (already done for CFLab)
+
+CFLab sends from the dedicated subdomain **`mail.aismallbizguru.com`**, onboarded
+via the Email Sending API (`POST /zones/{zone_id}/email/sending/subdomains` with
+`{"name":"mail.aismallbizguru.com"}`) or in the dashboard:
+
+1. Go to **Compute** > **Email Service** > **Email Sending** and select **Onboard Domain**.
+2. Choose the domain/subdomain to send from.
+3. Review the records Cloudflare adds automatically to the `cf-bounce.` subdomain, then **Done**.
+
+Cloudflare creates the records itself, so no manual DNS entry is needed:
+
+| Type | Name | Value |
+| --- | --- | --- |
+| `MX` | `cf-bounce.mail` | `route1/2/3.mx.cloudflare.net` (bounce routing) |
+| `TXT` | `cf-bounce.mail` | `v=spf1 include:_spf.mx.cloudflare.net ~all` |
+| `TXT` | `cf-bounce._domainkey.mail` | DKIM public key (`v=DKIM1; k=rsa; p=…`) |
+| `TXT` | `_dmarc.mail` | `v=DMARC1; p=reject;` |
+
+Because every record the product adds lives under the **`cf-bounce.mail.`** name
+(plus `_dmarc.mail.`), the apex mail configuration is untouched:
+`aismallbizguru.com` keeps its single
+`TXT "v=spf1 include:spf.efwd.registrar-servers.com ~all"` and its
+`eforward1..5.registrar-servers.com` MX records used for registrar forwarding.
+**Do not add a second `v=spf1` record at any hostname** — a duplicate SPF record
+invalidates SPF for that host.
+
+Check status at any time:
+
+```sh
+curl -H "Authorization: Bearer $CF_API_TOKEN" \
+  "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/email/sending/subdomains/$SUBDOMAIN_ID/dns/status"
+```
+
+`status` must be `ready` before sending to arbitrary recipients.
+
+### Local development
+
+`wrangler dev` simulates the binding and writes the rendered message to local
+files without sending. To send for real from a local Worker, add `"remote": true`
+to the `send_email` binding in `wrangler.local.jsonc`:
+
+```jsonc
+"send_email": [{ "name": "EMAIL", "remote": true }]
+```
+
+Remote bindings deliver real email, so only use test addresses.
+
+### Verifying delivery
+
+`GET /api/health` stays independent of email. For an end-to-end check, trigger a
+real message and confirm provider acceptance, then confirm it arrives:
+
+- `env.EMAIL.send()` resolves with a `messageId`, or the REST API returns
+  `{"delivered":[...],"queued":[...],"permanent_bounces":[...]}`.
+- The Email Sending **Activity log** (and **Email logs**) shows per-message
+  delivery and authentication results; **Email preview** is on by default for new
+  sending domains and retains content for about a week.
+- A rejected send throws with a stable code (`E_RECIPIENT_SUPPRESSED`, …), which is
+  logged; the admin UI shows `Invitation failed`, never a false success.
+
+Automated tests inject a fake binding, so a passing suite proves the flow and the
+failure handling — not live delivery.
 
 ## 4. Apply migrations and publish explicitly
 

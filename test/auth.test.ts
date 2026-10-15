@@ -9,18 +9,26 @@ import { HUMAN_TOKEN_PATTERN } from '../src/auth/human';
 
 const adminSecret = 'local-test-only-secret-with-32-characters';
 const bindings = env as unknown as Bindings & { TEST_MIGRATIONS: { name: string; queries: string[] }[] };
-const sentMail: { from: string; to: string; subject: string; text: string }[] = [];
+const sentMail: { from: unknown; to: unknown; subject: string; text: string; html?: string }[] = [];
 const testEnv = {
   ...bindings,
   DEV_ADMIN_TOKEN: adminSecret,
-  AUTH_FROM_EMAIL: 'noreply@cflab.example',
+  AUTH_FROM_EMAIL: 'noreply@mail.aismallbizguru.com',
+  AUTH_FROM_NAME: 'CFLab',
   AUTH_PUBLIC_BASE_URL: 'https://cflab.example',
   AUTH_SESSION_TTL_SECONDS: '604800',
   AUTH_RESET_TTL_SECONDS: '1800',
-  EMAIL: { send: async (message: { from: string; to: string; subject: string; text: string }) => { sentMail.push(message); return { messageId: 'test' }; } },
+  AUTH_INVITE_TTL_SECONDS: '604800',
+  EMAIL: {
+    send: async (message: { from: unknown; to: unknown; subject: string; text?: string; html?: string }) => {
+      sentMail.push({ ...message, text: message.text ?? '' });
+      return { messageId: '<test@cflab.example>' };
+    },
+  },
   RL_LOGIN: { limit: async () => ({ success: true }) },
   RL_RECOVERY: { limit: async () => ({ success: true }) },
   RL_RESET: { limit: async () => ({ success: true }) },
+  RL_INVITE: { limit: async () => ({ success: true }) },
 } as unknown as Bindings & { DEV_ADMIN_TOKEN: string };
 
 async function call(path: string, method = 'GET', body?: unknown, bearer?: string | null, headers: Record<string, string> = {}) {
@@ -305,16 +313,24 @@ describe('password recovery', () => {
     await bindings.DB.prepare('UPDATE password_reset_tokens SET expires_at = ?').bind(new Date(Date.now() - 1000).toISOString()).run();
     expect((await call('/api/auth/reset-password', 'POST', { token: raw, password: 'a brand new long password' })).status).toBe(400);
   });
-  it('supports the admin setup flow for a newly created user', async () => {
+  it('creating a user emails a single-use invitation that sets the first password', async () => {
     const created = await admin('/users', 'POST', { email: 'newbie@example.com' });
     expect(created.status).toBe(201);
-    const user = await created.json<{ id: string; has_password: boolean; email: string }>();
+    const user = await created.json<{ id: string; has_password: boolean; email: string; invite: { status: string } }>();
     expect(user.has_password).toBe(false);
-    expect((await admin(`/users/${user.id}/send-password-setup`, 'POST', {})).status).toBe(200);
-    const raw = /token=(cflr_[0-9a-f]{64})/.exec(sentMail[0]!.text)![1]!;
+    expect(user.invite.status).toBe('pending');
+    // Creating the user sends exactly one invitation; no second send is required.
+    expect(sentMail).toHaveLength(1);
+    expect(sentMail[0]!.to).toBe('newbie@example.com');
+    expect(sentMail[0]!.subject).toContain('Set up');
+    expect(sentMail[0]!.html).toContain('<html');
+    const raw = /token=(cfri_[0-9a-f]{64})/.exec(sentMail[0]!.text)![1]!;
     expect((await loginAs('newbie@example.com', password)).response.status).toBe(401);
     expect((await call('/api/auth/reset-password', 'POST', { token: raw, password })).status).toBe(200);
     expect((await loginAs('newbie@example.com', password)).response.status).toBe(200);
+    // Completing setup returns the account to a "password set" state.
+    const after = await admin(`/users/${user.id}`);
+    expect(await after.json()).toMatchObject({ has_password: true, invite: { status: 'completed', error: null } });
   });
   it('stays generic when mail delivery fails but reports setup failures to admins', async () => {
     await createUser('known@example.com', password);
@@ -330,9 +346,235 @@ describe('password recovery', () => {
       method: 'POST', headers: { Authorization: `Bearer ${adminSecret}`, 'Content-Type': 'application/json' }, body: '{}',
     }), failing);
     expect(setup.status).toBe(503);
-    expect(await bindings.DB.prepare('SELECT used_at FROM password_reset_tokens WHERE user_id = ?').bind(user.id).first<{ used_at: string | null }>()).toMatchObject({ used_at: expect.any(String) });
+    // A resend invalidates earlier links, and the failed delivery invalidates its
+    // own token, so no usable token is left behind and the admin can retry.
+    const unused = await bindings.DB.prepare('SELECT COUNT(*) AS n FROM password_reset_tokens WHERE user_id = ? AND used_at IS NULL').bind(user.id).first('n');
+    expect(unused).toBe(0);
+    const state = await bindings.DB.prepare('SELECT invite_status, invite_error FROM users WHERE id = ?').bind(user.id).first<{ invite_status: string; invite_error: string }>();
+    expect(state?.invite_status).toBe('failed');
+    expect(state?.invite_error).toBeTruthy();
   });
 });
+
+describe('account invitations', () => {
+  it('resends an invitation for an existing account without changing role or memberships', async () => {
+    // The Heather case: an administrator record already exists and must be
+    // invited in place, never recreated and never given a temporary password.
+    const userId = await createUser('heather@example.com', null, { is_admin: true });
+    await addMembership(userId, 'demo', 'write');
+    const resend = await admin(`/users/${userId}/send-password-setup`, 'POST', {});
+    expect(resend.status).toBe(200);
+    expect(await resend.json()).toMatchObject({ ok: true, purpose: 'invite', invite: { status: 'pending' } });
+    expect(sentMail).toHaveLength(1);
+    const raw = /token=(cfri_[0-9a-f]{64})/.exec(sentMail[0]!.text)![1]!;
+    const after = await admin(`/users/${userId}`);
+    expect(await after.json()).toMatchObject({ id: userId, is_admin: true, has_password: false, memberships: [{ app_id: 'demo', access: 'write' }] });
+    // Completing setup keeps the administrator role and the membership.
+    expect((await call('/api/auth/reset-password', 'POST', { token: raw, password })).status).toBe(200);
+    const signedIn = await loginAs('heather@example.com', password);
+    expect(signedIn.response.status).toBe(200);
+    expect(signedIn.body.user?.is_admin).toBe(true);
+    expect(signedIn.body.memberships).toEqual([{ app_id: 'demo', access: 'write' }]);
+  });
+
+  it('invalidates the previous invitation when resending', async () => {
+    const userId = await createUser('heather@example.com', null, { is_admin: true });
+    await admin(`/users/${userId}/send-password-setup`, 'POST', {});
+    const first = /token=(cfri_[0-9a-f]{64})/.exec(sentMail[0]!.text)![1]!;
+    await admin(`/users/${userId}/send-password-setup`, 'POST', {});
+    const second = /token=(cfri_[0-9a-f]{64})/.exec(sentMail[1]!.text)![1]!;
+    expect(first).not.toBe(second);
+    expect((await call('/api/auth/reset-password', 'POST', { token: first, password })).status).toBe(400);
+    expect((await call('/api/auth/reset-password', 'POST', { token: second, password })).status).toBe(200);
+  });
+
+  it('never reports a created-but-undelivered invitation as sent', async () => {
+    const failing = { ...testEnv, EMAIL: { send: async () => { throw new Error('provider down'); } } };
+    const created = await local.fetch(new Request('http://localhost/api/admin/users', {
+      method: 'POST', headers: { Authorization: `Bearer ${adminSecret}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'heather@example.com' }),
+    }), failing);
+    expect(created.status).toBe(201);
+    const user = await created.json<{ id: string; has_password: boolean; invite: { status: string; error: string } }>();
+    expect(user.has_password).toBe(false);
+    expect(user.invite.status).toBe('failed');
+    expect(user.invite.error).toBeTruthy();
+    expect(user.invite.error).not.toContain('provider down');
+    // The failed delivery did not leave a usable token behind.
+    const unused = await bindings.DB.prepare('SELECT COUNT(*) AS n FROM password_reset_tokens WHERE user_id = ? AND used_at IS NULL').bind(user.id).first('n');
+    expect(unused).toBe(0);
+  });
+
+
+  it('keeps invitation and recovery purposes distinct', async () => {
+    const userId = await createUser('heather@example.com', null, { is_admin: true });
+    await admin(`/users/${userId}/send-password-setup`, 'POST', {});
+    const invite = /token=(cfri_[0-9a-f]{64})/.exec(sentMail[0]!.text)![1]!;
+    // An invitation cannot be replayed once a password exists.
+    expect((await call('/api/auth/reset-password', 'POST', { token: invite, password })).status).toBe(200);
+    expect((await call('/api/auth/reset-password', 'POST', { token: invite, password: 'another long password here' })).status).toBe(400);
+    // Resending for an account that has a password issues a recovery link instead.
+    const resend = await admin(`/users/${userId}/send-password-setup`, 'POST', {});
+    expect(await resend.json()).toMatchObject({ purpose: 'recovery' });
+    expect(/token=(cflr_[0-9a-f]{64})/.test(sentMail[1]!.text)).toBe(true);
+    const purposes = await bindings.DB.prepare('SELECT purpose FROM password_reset_tokens WHERE user_id = ? ORDER BY created_at').bind(userId).all<{ purpose: string }>();
+    expect(purposes.results.map(row => row.purpose)).toEqual(['invite', 'recovery']);
+  });
+
+  it('expires invitations, reports it, and allows a fresh link', async () => {
+    const userId = await createUser('heather@example.com', null, { is_admin: true });
+    await admin(`/users/${userId}/send-password-setup`, 'POST', {});
+    const invite = /token=(cfri_[0-9a-f]{64})/.exec(sentMail[0]!.text)![1]!;
+    const past = new Date(Date.now() - 1000).toISOString();
+    await bindings.DB.batch([
+      bindings.DB.prepare('UPDATE password_reset_tokens SET expires_at = ? WHERE user_id = ?').bind(past, userId),
+      bindings.DB.prepare('UPDATE users SET invite_expires_at = ? WHERE id = ?').bind(past, userId),
+    ]);
+    expect((await call('/api/auth/reset-password', 'POST', { token: invite, password })).status).toBe(400);
+    const listed = await admin(`/users/${userId}`);
+    expect(await listed.json()).toMatchObject({ invite: { status: 'expired' } });
+    await admin(`/users/${userId}/send-password-setup`, 'POST', {});
+    const fresh = /token=(cfri_[0-9a-f]{64})/.exec(sentMail[1]!.text)![1]!;
+    expect((await call('/api/auth/reset-password', 'POST', { token: fresh, password })).status).toBe(200);
+  });
+
+  it('cannot activate a disabled account or grant access through setup', async () => {
+    const userId = await createUser('heather@example.com', null, { active: false });
+    // Disabled accounts are never emailed a setup link.
+    expect((await admin(`/users/${userId}/send-password-setup`, 'POST', {})).status).toBe(409);
+    expect(sentMail).toHaveLength(0);
+    // A token that already exists still cannot be redeemed while inactive.
+    const raw = 'cfri_' + 'a'.repeat(64);
+    await bindings.DB.prepare('INSERT INTO password_reset_tokens (id, user_id, token_hash, purpose, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)')
+      .bind(crypto.randomUUID(), userId, await hashToken(raw), 'invite', new Date().toISOString(), new Date(Date.now() + 60_000).toISOString()).run();
+    expect((await call('/api/auth/reset-password', 'POST', { token: raw, password })).status).toBe(400);
+    const row = await bindings.DB.prepare('SELECT password_hash, is_admin FROM users WHERE id = ?').bind(userId).first<{ password_hash: string | null; is_admin: number }>();
+    expect(row?.password_hash).toBeNull();
+    expect(row?.is_admin).toBe(0);
+  });
+
+
+  it('consumes an invitation token once under concurrent submissions', async () => {
+    const userId = await createUser('heather@example.com', null);
+    await admin(`/users/${userId}/send-password-setup`, 'POST', {});
+    const invite = /token=(cfri_[0-9a-f]{64})/.exec(sentMail[0]!.text)![1]!;
+    const [first, second] = await Promise.all([
+      call('/api/auth/reset-password', 'POST', { token: invite, password: 'first concurrent password' }),
+      call('/api/auth/reset-password', 'POST', { token: invite, password: 'second concurrent password' }),
+    ]);
+    expect([first.status, second.status].sort()).toEqual([200, 400]);
+    const winner = first.status === 200 ? 'first concurrent password' : 'second concurrent password';
+    const loser = first.status === 200 ? 'second concurrent password' : 'first concurrent password';
+    expect((await loginAs('heather@example.com', winner)).response.status).toBe(200);
+    expect((await loginAs('heather@example.com', loser)).response.status).toBe(401);
+  });
+
+  it('rate limits invitation resends per account', async () => {
+    const userId = await createUser('heather@example.com', null, { is_admin: true });
+    const limited = { ...testEnv, RL_INVITE: { limit: async () => ({ success: false }) } };
+    const response = await local.fetch(new Request(`http://localhost/api/admin/users/${userId}/send-password-setup`, {
+      method: 'POST', headers: { Authorization: `Bearer ${adminSecret}`, 'Content-Type': 'application/json' }, body: '{}',
+    }), limited);
+    expect(response.status).toBe(429);
+    expect(sentMail).toHaveLength(0);
+  });
+
+  it('sends distinct HTML and text emails and stores only token hashes', async () => {
+    await createUser('known@example.com', password);
+    await call('/api/auth/forgot-password', 'POST', { email: 'known@example.com' });
+    await admin('/users', 'POST', { email: 'newbie@example.com' });
+    expect(sentMail).toHaveLength(2);
+    const [recovery, invite] = sentMail;
+    expect(recovery!.subject).toContain('Reset');
+    expect(recovery!.text).toContain('token=cflr_');
+    expect(recovery!.html).toContain('Choose a new password');
+    expect(invite!.subject).toContain('Set up');
+    expect(invite!.text).toContain('token=cfri_');
+    expect(invite!.html).toContain('Choose your password');
+    const stored = await bindings.DB.prepare('SELECT purpose, token_hash FROM password_reset_tokens ORDER BY purpose').all<{ purpose: string; token_hash: string }>();
+    expect(stored.results.map(row => row.purpose)).toEqual(['invite', 'recovery']);
+    for (const mail of sentMail) {
+      expect(mail.text).not.toContain(password);
+      const raw = /token=(cf(?:lr|ri)_[0-9a-f]{64})/.exec(mail.text)![1]!;
+      expect(stored.results.some(row => row.token_hash === raw)).toBe(false);
+    }
+  });
+});
+
+
+// Account creation and external email delivery cannot share a database
+// transaction, and a single-use setup token is claimed before the credential
+// update. These tests pin the observable guarantees of both boundaries.
+describe('delivery and claim boundaries', () => {
+  it('keeps a created account when email is unavailable and lets an admin invite it later', async () => {
+    const unaudited = await bindings.DB.prepare('SELECT COUNT(*) AS n FROM users').first('n');
+    // AUTH_FROM_EMAIL empty means mail is unavailable: creation must still succeed.
+    const created = await local.fetch(new Request('http://localhost/api/admin/users', {
+      method: 'POST', headers: { Authorization: `Bearer ${adminSecret}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'heather@example.com', is_admin: true }),
+    }), { ...testEnv, AUTH_FROM_EMAIL: '' });
+    expect(created.status).toBe(201);
+    const user = await created.json<{ id: string; is_admin: boolean; has_password: boolean; invite: { status: string; error: string } }>();
+    expect(user.has_password).toBe(false);
+    expect(user.is_admin).toBe(true);
+    // Presented as a failure, never as a successful invitation.
+    expect(user.invite.status).toBe('failed');
+    expect(user.invite.error).toBeTruthy();
+    // The account really exists and holds the role it was created with.
+    expect(await bindings.DB.prepare('SELECT COUNT(*) AS n FROM users WHERE id = ?').bind(user.id).first('n')).toBe(1);
+    expect(Number(unaudited) + 1).toBe(await bindings.DB.prepare('SELECT COUNT(*) AS n FROM users').first('n'));
+    // A later resend reuses the same account and preserves role and memberships.
+    await admin(`/users/${user.id}/memberships`, 'POST', { app_id: 'demo', access: 'write' });
+    const resend = await admin(`/users/${user.id}/send-password-setup`, 'POST', {});
+    expect(resend.status).toBe(200);
+    expect(await resend.json()).toMatchObject({ ok: true, purpose: 'invite', invite: { status: 'pending' } });
+    const after = await admin(`/users/${user.id}`);
+    expect(await after.json()).toMatchObject({ id: user.id, is_admin: true, memberships: [{ app_id: 'demo', access: 'write' }] });
+    // The same account (not a replacement) completes setup and keeps its access.
+    const raw = /token=(cfri_[0-9a-f]{64})/.exec(sentMail[0]!.text)![1]!;
+    expect((await call('/api/auth/reset-password', 'POST', { token: raw, password })).status).toBe(200);
+    const signedIn = await loginAs('heather@example.com', password);
+    expect(signedIn.body.user?.id).toBe(user.id);
+    expect(signedIn.body.user?.is_admin).toBe(true);
+    expect(signedIn.body.memberships).toEqual([{ app_id: 'demo', access: 'write' }]);
+  });
+
+  it('leaves credentials and sessions untouched when a claimed link is never applied, and a fresh link works', async () => {
+    const userId = await createUser('known@example.com', password);
+    const session = (await loginAs('known@example.com', password)).body.token!;
+    await call('/api/auth/forgot-password', 'POST', { email: 'known@example.com' });
+    const raw = /token=(cflr_[0-9a-f]{64})/.exec(sentMail[0]!.text)![1]!;
+    // Simulate an interrupted claim: the token is spent but the credential batch
+    // never ran. Nothing else may have changed.
+    await bindings.DB.prepare('UPDATE password_reset_tokens SET used_at = ? WHERE token_hash = ?')
+      .bind(new Date().toISOString(), await hashToken(raw)).run();
+    expect((await call('/api/auth/reset-password', 'POST', { token: raw, password: 'a brand new long password' })).status).toBe(400);
+    const stored = await bindings.DB.prepare('SELECT password_hash FROM users WHERE id = ?').bind(userId).first<{ password_hash: string }>();
+    expect(await verifyPassword(password, stored!.password_hash)).toBe(true);
+    expect(await verifyPassword('a brand new long password', stored!.password_hash)).toBe(false);
+    // The existing session was not revoked by the failed attempt.
+    expect((await call('/api/auth/me', 'GET', undefined, session)).status).toBe(200);
+    // Requesting a fresh recovery link works end to end.
+    await call('/api/auth/forgot-password', 'POST', { email: 'known@example.com' });
+    const fresh = /token=(cflr_[0-9a-f]{64})/.exec(sentMail[1]!.text)![1]!;
+    expect(fresh).not.toBe(raw);
+    expect((await call('/api/auth/reset-password', 'POST', { token: fresh, password: 'a brand new long password' })).status).toBe(200);
+    // Only now are sessions revoked and the new password the only one that works.
+    expect((await call('/api/auth/me', 'GET', undefined, session)).status).toBe(401);
+    expect((await loginAs('known@example.com', password)).response.status).toBe(401);
+    expect((await loginAs('known@example.com', 'a brand new long password')).response.status).toBe(200);
+  });
+
+  it('rejects a link whose expiry passes before the claim', async () => {
+    await createUser('known@example.com', password);
+    await call('/api/auth/forgot-password', 'POST', { email: 'known@example.com' });
+    const raw = /token=(cflr_[0-9a-f]{64})/.exec(sentMail[0]!.text)![1]!;
+    await bindings.DB.prepare('UPDATE password_reset_tokens SET expires_at = ? WHERE token_hash = ?')
+      .bind(new Date(Date.now() - 1000).toISOString(), await hashToken(raw)).run();
+    expect((await call('/api/auth/reset-password', 'POST', { token: raw, password: 'a brand new long password' })).status).toBe(400);
+  });
+});
+
 
 describe('admin user management', () => {
   it('creates users with normalized email and rejects duplicates case-insensitively', async () => {
@@ -543,6 +785,27 @@ describe('human-facing pages', () => {
     const response = await call('/admin');
     expect(response.status).toBe(302);
     expect(response.headers.get('Location')).toBe('/admin/users');
+  });
+  it('offers password recovery from the login page and a fresh link from the reset page', async () => {
+    const login = await (await call('/admin/login')).text();
+    expect(login).toContain('href="/forgot-password"');
+    expect(login).toContain('Forgot password?');
+    const reset = await (await call('/reset-password')).text();
+    // Expired, invalid, and already-used links explain themselves and offer a retry.
+    expect(reset).toContain('href="/forgot-password"');
+    expect(reset).toContain('Request a new link');
+    expect(reset).toContain('cf(?:lr|ri)_');
+    const forgot = await (await call('/forgot-password')).text();
+    expect(forgot).toContain('/api/auth/forgot-password');
+  });
+  it('shows invitation state and resend controls in the admin users page', async () => {
+    const users = await (await call('/admin/users')).text();
+    expect(users).toContain('inviteBadge');
+    expect(users).toContain('Invitation failed');
+    expect(users).toContain('Resend invite');
+    expect(users).toContain('send-password-setup');
+    // A created user must not be reported as invited when delivery failed.
+    expect(users).toContain('invitation email was not delivered');
   });
 });
 

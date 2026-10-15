@@ -11,7 +11,7 @@ CFLab has two independent credential systems. They are deliberately not intercha
 | Authorization | enumerated app scopes | admin status or project membership |
 | Storage | SHA-256 hash in `api_tokens` | SHA-256 hash in `sessions` |
 
-Machine tokens keep their existing behavior. Human sessions add user identity and project membership without replacing service credentials. Password reset tokens use the distinct `cflr_` prefix and are never valid for API access.
+Machine tokens keep their existing behavior. Human sessions add user identity and project membership without replacing service credentials. Account-setup invitations use the `cfri_` prefix and password-reset tokens use the `cflr_` prefix; neither is ever valid for API access.
 
 ## User model
 
@@ -54,22 +54,38 @@ Login creates a `cflu_` + 64-hex-character token from a cryptographically secure
 
 ## Password reset lifecycle
 
-`POST /api/auth/forgot-password` always returns the same generic response for known, unknown, and inactive accounts and does not reveal delivery state. When an active account exists, CFLab invalidates previous unused reset tokens, issues a new `cflr_` token, stores only its SHA-256 hash, and emails a link.
+`POST /api/auth/forgot-password` always returns the same generic response for known, unknown, and inactive accounts and does not reveal delivery state. When an active account exists, CFLab invalidates previous unused setup tokens, issues a new `cflr_` recovery token, stores only its SHA-256 hash, and emails a link.
 
-Reset tokens are single-use, user-specific, and short-lived (30 minutes by default via `AUTH_RESET_TTL_SECONDS`, 300–86,400 seconds). `POST /api/auth/reset-password` validates the hash, expiry, and unused state; hashes the new password; marks the token and any siblings used; revokes all sessions; and requires a normal login. The user is never logged in automatically.
+Recovery tokens are single-use, user-specific, and short-lived (30 minutes by default via `AUTH_RESET_TTL_SECONDS`, 300–86,400 seconds). `POST /api/auth/reset-password` validates the hash, purpose, expiry, and unused state; hashes the new password; atomically claims the token before updating the password; invalidates siblings; revokes all sessions; and requires a normal login. The user is never logged in automatically.
 
-The reset URL is built only from the trusted `AUTH_PUBLIC_BASE_URL` var (HTTPS, loopback HTTP permitted for local development). An incoming `Host` header can never change it. Reset pages send `Referrer-Policy: no-referrer`, and the page removes the token from the address bar after reading it.
+## Account-setup invitations
+
+There is no public signup and no temporary password. `POST /api/admin/users` creates an account **and** sends its first invitation in one operation, and `POST /api/admin/users/:id/send-password-setup` resends an invitation for an existing account without recreating it or touching its roles or memberships. This is the supported way to bring an administrator record that already exists (for example an account created earlier through the admin UI) into use.
+
+- Passwordless accounts receive an **invitation** token (`cfri_`, valid 7 days by default via `AUTH_INVITE_TTL_SECONDS`). It is accepted only while the account still has no password, so a stale invitation can never overwrite a password the recipient already chose.
+- Accounts that already have a password receive a **recovery** link (`cflr_`) instead, so an admin resend is a deliberate password reset rather than a second first-time setup.
+- Invitation and recovery tokens are stored in the same table with a `purpose` column, but they use distinct prefixes, distinct lifetimes, and distinct permissions, and are logged under distinct actions.
+- The password a recipient chooses is the only credential ever created for the account; no password or temporary secret is generated, emailed, or shown to an administrator.
+- Setup never changes `is_admin` or memberships, and it never reactivates a disabled account.
+
+Invitation delivery state (`invite.status`: `none`, `pending`, `expired`, `failed`, `completed`, plus `attempted_at`, `expires_at`, and a sanitized `error`) is returned by the user APIs and shown in the admin UI. A created or resent user is **never** presented as successfully invited when delivery failed; the failure is recorded and the undelivered token is invalidated so the admin can retry.
 
 ## Email
 
-Transactional authentication mail (initial password setup, forgot-password reset) uses the Cloudflare Email Service `send_email` binding named `EMAIL`. Configuration:
+Transactional authentication mail (invitations and password resets) runs through a small service in `src/auth/email/`. It sends both HTML and plain text, and never logs messages, recipients, raw tokens, or credentials.
 
-```text
-AUTH_FROM_EMAIL        sender address; empty means mail is unavailable
-AUTH_PUBLIC_BASE_URL   trusted base for reset links
-```
+Cloudflare Email Service (**Email Sending**) is the only provider, called through the Worker `send_email` binding named `EMAIL` ([Workers API](https://developers.cloudflare.com/email-service/api/send-emails/workers-api/)). `send()` returns `{ messageId }`; a rejection throws an `Error` carrying a stable `code` (for example `E_RECIPIENT_SUPPRESSED`). Only that code is logged — never the recipient, subject, or body — and administrators always see a generic `503 email_unavailable`.
 
-Real delivery requires onboarding a sending domain in the Cloudflare dashboard (**Compute > Email Service > Email Sending > Onboard Domain**), which adds bounce MX, SPF, DKIM, and DMARC records. The current production configuration intentionally leaves `AUTH_FROM_EMAIL` empty until that onboarding is reviewed; until then, forgot-password still returns its generic response (mail failure is logged, not exposed), and admin password-setup requests fail with `503 email_unavailable`. No third-party mail provider is used, and automated tests use a fake binding so no real email is sent.
+| Setting | Kind | Value |
+| --- | --- | --- |
+| `EMAIL` | binding | `"send_email": [{ "name": "EMAIL" }]` in `wrangler.jsonc` |
+| `AUTH_FROM_EMAIL` | var | `noreply@mail.aismallbizguru.com` — must belong to an onboarded sending domain |
+| `AUTH_FROM_NAME` | var | Display name, `CFLab` |
+| `AUTH_PUBLIC_BASE_URL` | var | Trusted HTTPS base used to build setup links |
+
+Before a sending domain is onboarded, Email Sending can only reach verified destination addresses in the account. **After onboarding, the binding can send to any recipient.** Onboarding, DNS records, and verification are documented in [DEPLOYMENT.md](DEPLOYMENT.md#transactional-email). No third-party provider and no email secret are required; provider code lives only in `src/auth/email/`.
+
+The setup URL is built only from the trusted `AUTH_PUBLIC_BASE_URL` var (HTTPS, loopback HTTP permitted for local development). An incoming `Host` header can never change it. Reset pages send `Referrer-Policy: no-referrer`, remove the token from the address bar after reading it, and always offer a "Request a new link" action.
 
 ## Administration
 
@@ -121,8 +137,9 @@ Cloudflare's native Workers rate-limiting bindings protect the credential endpoi
 | `RL_LOGIN` | `POST /api/auth/login` | 10 per 60 s |
 | `RL_RECOVERY` | `POST /api/auth/forgot-password` | 5 per 60 s |
 | `RL_RESET` | `POST /api/auth/reset-password` | 10 per 60 s |
+| `RL_INVITE` | `POST /api/admin/users/:id/send-password-setup` | 10 per 60 s |
 
-Keys are `route + SHA-256(normalized email or reset token)`, so raw addresses and tokens never enter the limiter. Limits are per key and short-lived; there is no account lockout, so an attacker cannot permanently lock a user out. A rejected request returns `429 rate_limited`.
+Keys are `route + SHA-256(normalized email, reset token, or target user id)`, so raw addresses, tokens, and ids never enter the limiter. Limits are per key and short-lived; there is no account lockout, so an attacker cannot permanently lock a user out. A rejected request returns `429 rate_limited`.
 
 ## Security assumptions and logging
 

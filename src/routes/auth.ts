@@ -4,10 +4,10 @@ import { ApiError, fields, invalid, jsonBody } from '../http';
 import { assertPassword, dummyPasswordHash, hashPassword, verifyPassword } from '../auth/passwords';
 import { hashToken } from '../auth/crypto';
 import {
-  HUMAN_TOKEN_PATTERN, RESET_TOKEN_PATTERN, createSession, issueResetToken, membershipsFor,
-  normalizeEmail, requireHuman, revokeSession, safeUser,
+  HUMAN_TOKEN_PATTERN, SETUP_TOKEN_PATTERN, createSession, issueResetToken, membershipsFor,
+  normalizeEmail, requireHuman, revokeSession, safeUser, setupPurposeFor,
 } from '../auth/human';
-import { resetUrl, sendAuthMail } from '../auth/mail';
+import { resetUrl, sendAuthMail, setupEmail } from '../auth/mail';
 import { enforceRateLimit, rateLimitKey } from '../auth/ratelimit';
 
 const AUTH_METHODS = ['GET', 'POST'];
@@ -120,11 +120,10 @@ auth.post('/forgot-password', async c => {
   await enforceRateLimit(c.env.RL_RECOVERY, await rateLimitKey('forgot', email));
   const user = await c.env.DB.prepare('SELECT id, active FROM users WHERE email = ?').bind(email).first<{ id: string; active: number }>();
   if (user && user.active === 1) {
-    const reset = await issueResetToken(c.env, user.id);
+    const reset = await issueResetToken(c.env, user.id, 'recovery');
     try {
       const url = resetUrl(c.env, reset.token);
-      await sendAuthMail(c.env, email, 'CFLab password reset',
-        `A password reset was requested for your CFLab account.\n\nUse this link within 30 minutes:\n${url}\n\nIf you did not request this, ignore this message.`);
+      await sendAuthMail(c.env, email, setupEmail(c.env, 'recovery', url));
       logAuth('password_reset_requested', 'sent', user.id);
     } catch {
       console.error(JSON.stringify({ event: 'auth', action: 'password_reset_requested', result: 'mail_failed' }));
@@ -135,23 +134,46 @@ auth.post('/forgot-password', async c => {
   return c.json({ ok: true, message: 'If that account exists, password reset instructions have been sent.' });
 });
 
+interface SetupTokenRow {
+  id: string; user_id: string; expires_at: string; used_at: string | null;
+  purpose: 'recovery' | 'invite'; active: number; password_hash: string | null;
+}
 auth.post('/reset-password', async c => {
   const body = await jsonBody(c.req.raw); fields(body, ['token', 'password']);
-  if (typeof body.token !== 'string' || !RESET_TOKEN_PATTERN.test(body.token)) throw new ApiError(400, 'invalid_token', 'Invalid or expired reset token');
+  if (typeof body.token !== 'string' || !SETUP_TOKEN_PATTERN.test(body.token)) throw new ApiError(400, 'invalid_token', 'This link is invalid or has expired. Request a new one.');
   const next = assertPassword(body.password);
   await enforceRateLimit(c.env.RL_RESET, await rateLimitKey('reset', body.token));
-  const row = await c.env.DB.prepare('SELECT id, user_id, expires_at, used_at FROM password_reset_tokens WHERE token_hash = ?')
-    .bind(await hashToken(body.token)).first<{ id: string; user_id: string; expires_at: string; used_at: string | null }>();
+  // The prefix pins the purpose; invitation links are only honoured while the
+  // account still has no password, so a stale invite cannot rewrite a chosen
+  // password. Recovery links work for any active account.
+  const purpose = setupPurposeFor(body.token);
+  const row = await c.env.DB.prepare(
+    `SELECT t.id, t.user_id, t.expires_at, t.used_at, t.purpose, u.active, u.password_hash
+     FROM password_reset_tokens t JOIN users u ON u.id = t.user_id
+     WHERE t.token_hash = ?`,
+  ).bind(await hashToken(body.token)).first<SetupTokenRow>();
   const now = new Date().toISOString();
-  if (!row || row.used_at || row.expires_at <= now) throw new ApiError(400, 'invalid_token', 'Invalid or expired reset token');
-  const results = await c.env.DB.batch([
-    c.env.DB.prepare('UPDATE users SET password_hash = ?, password_changed_at = ?, updated_at = ? WHERE id = ?')
+  if (!row || row.used_at || row.expires_at <= now || row.purpose !== purpose || row.active !== 1
+    || (purpose === 'invite' && row.password_hash !== null)) {
+    logAuth('password_setup', 'denied', row?.user_id);
+    throw new ApiError(400, 'invalid_token', 'This link is invalid or has expired. Request a new one.');
+  }
+  // Compare-and-swap: a single conditional statement atomically claims the token,
+  // so concurrent submissions cannot both succeed. Only the winner proceeds. If
+  // the process stops between this claim and the credential batch below, the link
+  // is simply spent (nothing is partially changed) and the user requests a new one.
+  const claimed = await c.env.DB.prepare('UPDATE password_reset_tokens SET used_at = ? WHERE id = ? AND used_at IS NULL AND expires_at > ?')
+    .bind(now, row.id, now).run();
+  if (!claimed.meta.changes) throw new ApiError(400, 'invalid_token', 'This link is invalid or has expired. Request a new one.');
+  // D1 `batch` runs as one transaction: the password, sibling tokens, and every
+  // session change together or not at all, so credentials and sessions can never
+  // be partially updated.
+  await c.env.DB.batch([
+    c.env.DB.prepare('UPDATE users SET password_hash = ?, password_changed_at = ?, updated_at = ?, invite_status = NULL, invite_expires_at = NULL, invite_error = NULL WHERE id = ?')
       .bind(await hashPassword(next), now, now, row.user_id),
-    c.env.DB.prepare('UPDATE password_reset_tokens SET used_at = ? WHERE id = ? AND used_at IS NULL').bind(now, row.id),
     c.env.DB.prepare('UPDATE password_reset_tokens SET used_at = ? WHERE user_id = ? AND used_at IS NULL').bind(now, row.user_id),
     c.env.DB.prepare('UPDATE sessions SET revoked_at = COALESCE(revoked_at, ?) WHERE user_id = ?').bind(now, row.user_id),
   ]);
-  if (!results[1]?.meta.changes) throw new ApiError(400, 'invalid_token', 'Invalid or expired reset token');
-  logAuth('password_reset_completed', 'ok', row.user_id);
+  logAuth(purpose === 'invite' ? 'account_setup_completed' : 'password_reset_completed', 'ok', row.user_id);
   return c.json({ ok: true });
 });

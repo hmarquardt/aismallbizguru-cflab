@@ -7,14 +7,30 @@ export const HUMAN_TOKEN_PREFIX = 'cflu_';
 export const HUMAN_TOKEN_PATTERN = /^cflu_[0-9a-f]{64}$/;
 export const RESET_TOKEN_PREFIX = 'cflr_';
 export const RESET_TOKEN_PATTERN = /^cflr_[0-9a-f]{64}$/;
+// Account-setup invitations are a distinct purpose from password recovery. Both
+// are single-use and hash-only, but they are issued, prefixed, logged, and
+// lifetime-bounded separately, and an invitation is accepted only while the
+// account still has no password.
+export const INVITE_TOKEN_PREFIX = 'cfri_';
+export const INVITE_TOKEN_PATTERN = /^cfri_[0-9a-f]{64}$/;
+export const SETUP_TOKEN_PATTERN = /^cf(?:lr|ri)_[0-9a-f]{64}$/;
+export type SetupPurpose = 'recovery' | 'invite';
 export const READ_SCOPES: Scope[] = ['records:read', 'files:read'];
 export const WRITE_SCOPES: Scope[] = ['records:read', 'records:write', 'files:read', 'files:write', 'proxy:use'];
 const SESSION_TTL_DEFAULT = 604_800;
 const RESET_TTL_DEFAULT = 1_800;
+const INVITE_TTL_DEFAULT = 604_800;
 const LAST_SEEN_INTERVAL_MS = 5 * 60 * 1000;
 
 export function newHumanToken(): string { return HUMAN_TOKEN_PREFIX + randomHex(32); }
 export function newResetToken(): string { return RESET_TOKEN_PREFIX + randomHex(32); }
+export function newInviteToken(): string { return INVITE_TOKEN_PREFIX + randomHex(32); }
+export function setupTokenFor(purpose: SetupPurpose): string {
+  return purpose === 'invite' ? newInviteToken() : newResetToken();
+}
+export function setupPurposeFor(token: string): SetupPurpose {
+  return token.startsWith(INVITE_TOKEN_PREFIX) ? 'invite' : 'recovery';
+}
 
 export function normalizeEmail(value: unknown): string {
   if (typeof value !== 'string') throw new ApiError(400, 'invalid_input', 'Invalid email');
@@ -33,6 +49,12 @@ export function sessionTtlSeconds(env: Bindings): number {
 }
 export function resetTtlSeconds(env: Bindings): number {
   return ttl(env.AUTH_RESET_TTL_SECONDS, RESET_TTL_DEFAULT, 300, 86_400);
+}
+export function inviteTtlSeconds(env: Bindings): number {
+  return ttl(env.AUTH_INVITE_TTL_SECONDS, INVITE_TTL_DEFAULT, 300, 2_592_000);
+}
+export function setupTtlSeconds(env: Bindings, purpose: SetupPurpose): number {
+  return purpose === 'invite' ? inviteTtlSeconds(env) : resetTtlSeconds(env);
 }
 export function safeUser(row: Pick<UserRow, 'id' | 'email' | 'active' | 'is_admin'>): HumanUser {
   return { id: row.id, email: row.email, active: !!row.active, is_admin: !!row.is_admin };
@@ -92,16 +114,26 @@ export async function revokeAllSessions(env: Bindings, userId: string): Promise<
     .bind(new Date().toISOString(), userId).run();
   return result.meta.changes;
 }
-export async function issueResetToken(env: Bindings, userId: string): Promise<{ token: string; expires_at: string }> {
-  const token = newResetToken();
+export async function issueResetToken(env: Bindings, userId: string, purpose: SetupPurpose = 'recovery'): Promise<{ token: string; expires_at: string; purpose: SetupPurpose }> {
+  const token = setupTokenFor(purpose);
   const now = new Date();
-  const expiresAt = new Date(now.getTime() + resetTtlSeconds(env) * 1000).toISOString();
+  const expiresAt = new Date(now.getTime() + setupTtlSeconds(env, purpose) * 1000).toISOString();
   await env.DB.batch([
     env.DB.prepare('UPDATE password_reset_tokens SET used_at = ? WHERE user_id = ? AND used_at IS NULL').bind(now.toISOString(), userId),
-    env.DB.prepare('INSERT INTO password_reset_tokens (id, user_id, token_hash, created_at, expires_at) VALUES (?, ?, ?, ?, ?)')
-      .bind(crypto.randomUUID(), userId, await hashToken(token), now.toISOString(), expiresAt),
+    env.DB.prepare('INSERT INTO password_reset_tokens (id, user_id, token_hash, purpose, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)')
+      .bind(crypto.randomUUID(), userId, await hashToken(token), purpose, now.toISOString(), expiresAt),
   ]);
-  return { token, expires_at: expiresAt };
+  return { token, expires_at: expiresAt, purpose };
+}
+// Invitation delivery state is denormalized onto `users` so the admin UI can show
+// it without joining token rows. Only sanitized messages are stored.
+export async function recordInvitationSent(env: Bindings, userId: string, attemptedAt: string, expiresAt: string): Promise<void> {
+  await env.DB.prepare('UPDATE users SET invited_at = ?, invite_status = ?, invite_expires_at = ?, invite_error = NULL WHERE id = ?')
+    .bind(attemptedAt, 'sent', expiresAt, userId).run();
+}
+export async function recordInvitationFailed(env: Bindings, userId: string, attemptedAt: string, message: string): Promise<void> {
+  await env.DB.prepare('UPDATE users SET invited_at = ?, invite_status = ?, invite_expires_at = NULL, invite_error = ? WHERE id = ?')
+    .bind(attemptedAt, 'failed', message.slice(0, 200), userId).run();
 }
 
 export async function membershipsFor(db: D1Database, userId: string): Promise<Membership[]> {

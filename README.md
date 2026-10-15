@@ -26,7 +26,7 @@ npm run db:migrate:analytics
 npm run dev:analytics
 ```
 
-Wrangler listens on `http://127.0.0.1:8787`. D1 and R2 are simulated locally and persist under `.wrangler/state`. Both `dev` and `db:migrate` explicitly use `wrangler.local.jsonc`, so setting the real deployment database ID does not switch local development storage. `.dev.vars` is ignored by Git; never put real secrets in the example file. The local admin entrypoint requires the secret, a loopback host, and no browser Origin header; human admin sessions also work there. Minimal account pages are served at `/admin/login`, `/admin/users`, `/account`, `/forgot-password`, and `/reset-password`. Local auth mail is simulated by the `send_email` binding; no real email is sent.
+Wrangler listens on `http://127.0.0.1:8787`. D1 and R2 are simulated locally and persist under `.wrangler/state`. Both `dev` and `db:migrate` explicitly use `wrangler.local.jsonc`, so setting the real deployment database ID does not switch local development storage. `.dev.vars` is ignored by Git; never put real secrets in the example file. The local admin entrypoint requires the secret, a loopback host, and no browser Origin header; human admin sessions also work there. Minimal account pages are served at `/admin/login`, `/admin/users`, `/account`, `/forgot-password`, and `/reset-password`. Auth mail uses Cloudflare Email Service (Email Sending); locally the `send_email` binding is simulated so no real email is sent — see [AUTH.md](docs/AUTH.md#email).
 
 ```sh
 curl http://127.0.0.1:8787/api/health
@@ -61,7 +61,7 @@ Tests apply the real SQL migration to separate ephemeral storage. Only upstream 
 
 `wrangler.jsonc` targets only the custom domain `cflab.aismallbizguru.com`. Follow [DEPLOYMENT.md](docs/DEPLOYMENT.md) for exact resource creation, account configuration, migrations, publishing, and verification commands. No additional staging config is needed for this parallel production-equivalent environment.
 
-Nothing in local setup, `npm run check`, local migrations, or `build` deploys remotely. The D1 ID remains a placeholder; workers.dev/preview URLs remain disabled, the proxy hostname allowlist is empty, and production administration requires a human admin session. `AUTH_FROM_EMAIL` stays empty until a sending domain is deliberately onboarded, so authentication mail is not operational yet. Do not deploy `wrangler.local.jsonc` or `src/local.ts`.
+Nothing in local setup, `npm run check`, local migrations, or `build` deploys remotely. The D1 ID remains a placeholder; workers.dev/preview URLs remain disabled, the proxy hostname allowlist is empty, and production administration requires a human admin session. Authentication mail requires the `send_email` binding and an onboarded Email Sending domain (CFLab uses `mail.aismallbizguru.com`); without them, setup requests report a failure instead of a successful invitation. Do not deploy `wrangler.local.jsonc` or `src/local.ts`.
 
 GET-only remote comparison is explicit: `npm run test:compat` requires `LABBOX_BASE_URL` and `CFLAB_BASE_URL`. It is excluded from normal tests and CI. See [remote checks](docs/DEPLOYMENT.md#read-only-parallel-checks) for record/collection fixtures, read tokens, optional anonymous/CORS checks, and the separate legacy-health safety gate. Normal checks test the probe harness offline without contacting either deployment.
 

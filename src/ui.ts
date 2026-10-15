@@ -200,8 +200,8 @@ document.getElementById('forgot-form').addEventListener('submit',function(e){
 }
 
 export function resetPage(): string {
-  return plainShell('Reset password', `
-<p class="lede">Choose a new password for your CFLab account.</p>
+  return plainShell('Choose a password', `
+<p class="lede">Set a new password for your CFLab account, then sign in.</p>
 <form id="reset-form">
   <div class="field">
     <label for="new-password">New password</label>
@@ -215,19 +215,25 @@ export function resetPage(): string {
   <button type="submit" class="btn btn-primary btn-block">Set password</button>
 </form>
 <div id="msg" class="msg" role="status" aria-live="polite"></div>
-<p class="auth-footer"><a href="/admin/login">Back to sign in</a></p>`, `
+<p class="auth-footer"><a href="/admin/login">Back to sign in</a> &middot; <a href="/forgot-password">Request a new link</a></p>`, `
 var token=new URLSearchParams(location.search).get('token')||'';
-if(token)history.replaceState(null,'','/reset-password');
-document.getElementById('reset-form').addEventListener('submit',function(e){
-  e.preventDefault();
-  var p=document.getElementById('new-password').value;
-  var c=document.getElementById('confirm-password').value;
-  if(p!==c){show('msg','Passwords do not match','err');return}
-  show('msg','Saving...','');
-  api('/api/auth/reset-password','POST',{token:token,password:p})
-    .then(function(){show('msg','Password set. You can now sign in.','ok');document.getElementById('reset-form').style.display='none'})
-    .catch(function(err){show('msg',err.message,'err')});
-});`);
+history.replaceState(null,'','/reset-password');
+var form=document.getElementById('reset-form');
+if(!/^cf(?:lr|ri)_[0-9a-f]{64}$/.test(token)){
+  form.hidden=true;
+  show('msg','This password link is missing or malformed. Request a new link below.','err');
+}else{
+  form.addEventListener('submit',function(e){
+    e.preventDefault();
+    var p=document.getElementById('new-password').value;
+    var c=document.getElementById('confirm-password').value;
+    if(p!==c){show('msg','Passwords do not match','err');return}
+    show('msg','Saving...','');
+    api('/api/auth/reset-password','POST',{token:token,password:p})
+      .then(function(){form.hidden=true;show('msg','Password set. You can now sign in.','ok')})
+      .catch(function(err){show('msg',err.message||'This link is invalid or has expired. Request a new link below.','err')});
+  });
+}`);
 }
 
 export function accountPage(): string {
@@ -279,7 +285,7 @@ document.getElementById('pw-form').addEventListener('submit',function(e){
 export function usersPage(): string {
   return appShell('Users', 'Create users, assign project access, and manage sessions.', `
 <section class="panel">
-  <div class="panel-head"><h2>Add user</h2><p>New users have no password until they complete a setup link.</p></div>
+  <div class="panel-head"><h2>Add user</h2><p>Creating a user emails an account-setup invitation with a single-use link. The account stays unusable until the recipient chooses a password.</p></div>
   <form id="create-form" class="inline-form">
     <div class="field grow">
       <label for="new-email">Email</label>
@@ -298,12 +304,20 @@ export function usersPage(): string {
 </section>`, `
 var appsCache=[];
 function appName(id){for(var i=0;i<appsCache.length;i++){if(appsCache[i].id===id)return appsCache[i].name||formatId(id)}return formatId(id)}
+function inviteBadge(u){
+  var i=u.invite||{status:'none'};
+  if(i.status==='completed')return '<span class="badge badge-active">Password set</span>';
+  if(i.status==='pending')return '<span class="badge" title="Invitation sent '+(i.attempted_at||'')+'">Invitation sent</span>';
+  if(i.status==='failed')return '<span class="badge badge-inactive" title="'+esc(i.error||'Delivery failed')+'">Invitation failed</span>';
+  if(i.status==='expired')return '<span class="badge">Invitation expired</span>';
+  return '<span class="badge">No password</span>';
+}
 function load(){return Promise.all([api('/api/admin/users'),api('/api/admin/apps')]).then(function(r){appsCache=r[1].apps||[];render(r[0].users||[]);return null})}
 function render(users){
   var host=document.getElementById('users');
   if(!users.length){host.innerHTML='<p class="muted">No users yet.</p>';return}
   var rows=users.map(function(u){
-    var badges=(u.is_admin?'<span class="badge badge-admin">Admin</span>':'')+(u.active?'<span class="badge badge-active">Active</span>':'<span class="badge badge-inactive">Inactive</span>')+(u.has_password?'':'<span class="badge">No password</span>');
+    var badges=(u.is_admin?'<span class="badge badge-admin">Admin</span>':'')+(u.active?'<span class="badge badge-active">Active</span>':'<span class="badge badge-inactive">Inactive</span>')+inviteBadge(u);
     var chips=u.memberships.length?u.memberships.map(function(m){return '<span class="chip">'+esc(appName(m.app_id))+' <span class="badge '+(m.access==='write'?'badge-write':'badge-read')+'">'+esc(m.access)+'</span><button type="button" class="icon-btn" data-action="rm-membership" data-user="'+u.id+'" data-app="'+esc(m.app_id)+'" data-email="'+esc(u.email)+'" data-project="'+esc(appName(m.app_id))+'" aria-label="Remove '+esc(appName(m.app_id))+' access">&times;</button></span>'}).join(''):'<span class="muted">None</span>';
     var options=appsCache.map(function(a){return '<option value="'+esc(a.id)+'">'+esc(a.name||a.id)+'</option>'}).join('');
     var assign=appsCache.length?'<div class="assign"><label class="sr-only" for="app-'+u.id+'">Project for '+esc(u.email)+'</label><select id="app-'+u.id+'" data-role="app">'+options+'</select><select data-role="access" aria-label="Access level"><option value="read">Read</option><option value="write">Write</option></select><button type="button" class="btn btn-secondary btn-small" data-action="add-membership" data-user="'+u.id+'">Assign</button></div>':'';
@@ -311,7 +325,7 @@ function render(users){
       +'<button type="button" class="btn btn-small '+(u.active?'btn-danger':'btn-secondary')+'" data-action="toggle-active" data-user="'+u.id+'" data-active="'+(u.active?'1':'0')+'" data-email="'+esc(u.email)+'">'+(u.active?'Deactivate':'Activate')+'</button>'
       +'<button type="button" class="btn btn-small '+(u.is_admin?'btn-danger':'btn-secondary')+'" data-action="toggle-admin" data-user="'+u.id+'" data-admin="'+(u.is_admin?'1':'0')+'" data-email="'+esc(u.email)+'">'+(u.is_admin?'Remove admin':'Make admin')+'</button>'
       +'<button type="button" class="btn btn-secondary btn-small" data-action="revoke" data-user="'+u.id+'" data-email="'+esc(u.email)+'">Revoke sessions</button>'
-      +(u.active?'<button type="button" class="btn btn-secondary btn-small" data-action="setup" data-user="'+u.id+'">Send setup</button>':'')
+      +(u.active?'<button type="button" class="btn btn-secondary btn-small" data-action="setup" data-user="'+u.id+'" data-email="'+esc(u.email)+'">'+(u.invite&&u.invite.status==='pending'?'Resend invite':'Send invite')+'</button>':'')
       +'</div>';
     return '<tr><td data-label="User"><div class="user-email">'+esc(u.email)+'</div><div class="chips">'+badges+'</div></td>'
       +'<td data-label="Projects">'+chips+assign+'</td>'
@@ -329,12 +343,20 @@ document.getElementById('users').addEventListener('click',function(e){
   else if(action==='toggle-active'){if(b.getAttribute('data-active')==='1'&&!confirm('Deactivate '+email+'? Their sessions will be revoked.'))return;api('/api/admin/users/'+id,'PATCH',{active:b.getAttribute('data-active')!=='1'}).then(function(){return done('User updated')},fail)}
   else if(action==='toggle-admin'){if(b.getAttribute('data-admin')==='1'&&!confirm('Remove administrator access from '+email+'?'))return;api('/api/admin/users/'+id,'PATCH',{is_admin:b.getAttribute('data-admin')!=='1'}).then(function(){return done('User updated')},fail)}
   else if(action==='revoke'){if(!confirm('Revoke all sessions for '+email+'? They will need to sign in again.'))return;api('/api/admin/users/'+id+'/revoke-sessions','POST',{}).then(function(d){return done('Revoked '+d.revoked+' session(s)')},fail)}
-  else if(action==='setup'){api('/api/admin/users/'+id+'/send-password-setup','POST',{}).then(function(){return done('Setup email sent')},fail)}
+  else if(action==='setup'){api('/api/admin/users/'+id+'/send-password-setup','POST',{}).then(function(r){return done((r.purpose==='invite'?'Invitation':'Reset link')+' sent to '+email)},function(err){show('msg',err.message,'err');return load()})}
 });
 document.getElementById('create-form').addEventListener('submit',function(e){
   e.preventDefault();
   api('/api/admin/users','POST',{email:document.getElementById('new-email').value,is_admin:document.getElementById('new-admin').checked})
-    .then(function(){document.getElementById('new-email').value='';document.getElementById('new-admin').checked=false;show('msg','User created. Send setup when ready.','ok');return load()},function(err){show('msg',err.message,'err')});
+    .then(function(u){
+      document.getElementById('new-email').value='';document.getElementById('new-admin').checked=false;
+      if(u.invite&&u.invite.status==='failed'){
+        show('msg','User created, but the invitation email was not delivered: '+(u.invite.error||'delivery failed')+'. Use Send invite to try again.','err');
+      }else{
+        show('msg','User created. Invitation sent to '+u.email+'.','ok');
+      }
+      return load();
+    },function(err){show('msg',err.message,'err')});
 });
 api('/api/auth/me').then(function(data){
   if(!data.user.is_admin){location.href='/account';return}

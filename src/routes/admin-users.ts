@@ -1,17 +1,69 @@
 import { Hono } from 'hono';
-import type { ContextEnv, Membership, UserRow } from '../types';
+import type { Bindings, ContextEnv, Membership, UserRow } from '../types';
 import { ApiError, boolean, fields, id, invalid, jsonBody, slug } from '../http';
 import { hashToken } from '../auth/crypto';
-import { issueResetToken, membershipsFor, normalizeEmail, revokeAllSessions } from '../auth/human';
-import { resetUrl, sendAuthMail } from '../auth/mail';
+import {
+  issueResetToken, membershipsFor, normalizeEmail, recordInvitationFailed, recordInvitationSent,
+  revokeAllSessions, type SetupPurpose,
+} from '../auth/human';
+import { resetUrl, sendAuthMail, setupEmail } from '../auth/mail';
+import { enforceRateLimit, rateLimitKey } from '../auth/ratelimit';
 import { logAuth } from './auth';
 
+// Invitation state is derived, not client-supplied, so the admin UI can never
+// show a failed delivery as a successful invitation.
+function inviteOutput(row: UserRow) {
+  const now = new Date().toISOString();
+  const status = row.password_hash ? 'completed'
+    : row.invite_status === 'sent' ? (row.invite_expires_at && row.invite_expires_at > now ? 'pending' : 'expired')
+      : row.invite_status === 'failed' ? 'failed' : 'none';
+  return {
+    status,
+    attempted_at: row.invited_at,
+    expires_at: status === 'pending' ? row.invite_expires_at : null,
+    error: status === 'failed' ? row.invite_error : null,
+  };
+}
 function userOutput(row: UserRow, memberships: Membership[]) {
   return {
     id: row.id, email: row.email, active: !!row.active, is_admin: !!row.is_admin, has_password: !!row.password_hash,
     created_at: row.created_at, updated_at: row.updated_at, password_changed_at: row.password_changed_at, last_login_at: row.last_login_at,
     memberships,
+    invite: inviteOutput(row),
   };
+}
+// Sanitized reason only: provider bodies, recipients, and credentials never reach
+// the response, the database, or the logs.
+function deliveryMessage(error: unknown): string {
+  return error instanceof ApiError ? error.message : 'Email delivery failed';
+}
+interface DeliveryOutcome { purpose: SetupPurpose; expires_at: string | null; delivered: boolean; error: string | null; }
+// Issues a single-use setup token and emails it. A passwordless account receives
+// an invitation; an account that already has a password receives a recovery link.
+// Delivery failure invalidates the undelivered token and is recorded, never hidden.
+// This never throws: the account row is created independently of external email
+// delivery, so a delivery problem must not be reported as a failed creation.
+async function deliverSetupLink(env: Bindings, user: Pick<UserRow, 'id' | 'email' | 'password_hash'>): Promise<DeliveryOutcome> {
+  const purpose: SetupPurpose = user.password_hash ? 'recovery' : 'invite';
+  const attemptedAt = new Date().toISOString();
+  let token: { token: string; expires_at: string };
+  try {
+    token = await issueResetToken(env, user.id, purpose);
+  } catch {
+    await recordInvitationFailed(env, user.id, attemptedAt, 'Could not create a setup link');
+    return { purpose, expires_at: null, delivered: false, error: 'Could not create a setup link' };
+  }
+  try {
+    await sendAuthMail(env, user.email, setupEmail(env, purpose, resetUrl(env, token.token)));
+  } catch (error) {
+    const message = deliveryMessage(error);
+    await env.DB.prepare('UPDATE password_reset_tokens SET used_at = ? WHERE token_hash = ?')
+      .bind(new Date().toISOString(), await hashToken(token.token)).run();
+    await recordInvitationFailed(env, user.id, attemptedAt, message);
+    return { purpose, expires_at: null, delivered: false, error: message };
+  }
+  await recordInvitationSent(env, user.id, attemptedAt, token.expires_at);
+  return { purpose, expires_at: token.expires_at, delivered: true, error: null };
 }
 async function membershipsByUser(db: D1Database, userIds: string[]): Promise<Map<string, Membership[]>> {
   const map = new Map<string, Membership[]>();
@@ -61,10 +113,15 @@ adminUsers.post('/', async c => {
     throw error;
   }
   logAuth('user_created', 'ok', userId);
-  return c.json(userOutput({
-    id: userId, email, password_hash: null, active: 1, is_admin: isAdmin ? 1 : 0,
-    created_at: now, updated_at: now, password_changed_at: null, last_login_at: null,
-  }, []), 201);
+  // Creating a user sends the account-setup invitation immediately. There is no
+  // public signup and no temporary password: the account stays unusable until the
+  // recipient completes the emailed link. Email delivery cannot share the account
+  // insert's transaction, so a delivery problem is recorded in the `invite` block
+  // (and never reported as a successful invitation); it must also never fail the
+  // creation, because the account exists independently and can be invited again.
+  const outcome = await deliverSetupLink(c.env, { id: userId, email, password_hash: null });
+  if (!outcome.delivered) logAuth('invitation_sent', 'mail_failed', userId);
+  return c.json(userOutput(await findUser(c.env.DB, userId), []), 201);
 });
 
 adminUsers.get('/:id', async c => {
@@ -136,16 +193,16 @@ adminUsers.post('/:id/send-password-setup', async c => {
   const userId = id(c.req.param('id'));
   const user = await findUser(c.env.DB, userId);
   if (!user.active) throw new ApiError(409, 'user_inactive', 'User is inactive');
-  const reset = await issueResetToken(c.env, userId);
-  try {
-    const url = resetUrl(c.env, reset.token);
-    await sendAuthMail(c.env, user.email, 'CFLab password setup',
-      `An administrator created or reset your CFLab account.\n\nUse this link within 30 minutes to choose a password:\n${url}\n\nIf you did not expect this, ignore this message.`);
-  } catch (error) {
-    await c.env.DB.prepare('UPDATE password_reset_tokens SET used_at = ? WHERE token_hash = ?')
-      .bind(new Date().toISOString(), await hashToken(reset.token)).run();
-    throw error;
+  // Abuse control: invitation/reset resends are rate limited per target account.
+  await enforceRateLimit(c.env.RL_INVITE, await rateLimitKey('invite', userId));
+  const outcome = await deliverSetupLink(c.env, user);
+  if (!outcome.delivered) {
+    logAuth(outcome.purpose === 'invite' ? 'invitation_sent' : 'password_reset_sent', 'mail_failed', userId);
+    throw new ApiError(503, 'email_unavailable', outcome.error ?? 'Email delivery failed');
   }
-  logAuth('password_setup_sent', 'ok', userId);
-  return c.json({ ok: true, expires_at: reset.expires_at });
+  logAuth(outcome.purpose === 'invite' ? 'invitation_sent' : 'password_reset_sent', 'ok', userId);
+  return c.json({
+    ok: true, purpose: outcome.purpose, expires_at: outcome.expires_at,
+    invite: inviteOutput(await findUser(c.env.DB, userId)),
+  });
 });

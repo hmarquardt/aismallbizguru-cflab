@@ -33,7 +33,7 @@ Human credentials are separate from machine app tokens. A human session token st
 | GET `/api/auth/me` | session | Safe profile, `created_at`, `last_login_at`, memberships |
 | POST `/api/auth/change-password` | session | `{current_password,new_password}` → 200; revokes all sessions |
 | POST `/api/auth/forgot-password` | none | `{email}` → always the same generic 200 response |
-| POST `/api/auth/reset-password` | none | `{token,password}` → 200; single-use token, revokes all sessions |
+| POST `/api/auth/reset-password` | none | `{token,password}` → 200; accepts an invitation (`cfri_`) or recovery (`cflr_`) token; single-use, revokes all sessions |
 
 ```sh
 curl http://127.0.0.1:8787/api/auth/login \
@@ -41,7 +41,7 @@ curl http://127.0.0.1:8787/api/auth/login \
   -d '{"email":"user@example.com","password":"a long pass phrase"}'
 ```
 
-Login returns 401 `invalid_credentials` without distinguishing nonexistent, inactive, passwordless, or wrong-password accounts. `forgot-password` never reveals whether an account exists or whether mail was delivered. Passwords are 15–128 characters with no composition rules. Reset tokens expire after 30 minutes by default and are invalidated when a newer one is issued. Successful reset or change requires a fresh login.
+Login returns 401 `invalid_credentials` without distinguishing nonexistent, inactive, passwordless, or wrong-password accounts. `forgot-password` never reveals whether an account exists or whether mail was delivered. Passwords are 15–128 characters with no composition rules. Invitations (`cfri_`) expire after 7 days by default and are accepted only while the account has no password; recovery links (`cflr_`) expire after 30 minutes by default. Issuing a new token invalidates previous unused tokens, and the token is atomically claimed before the password is written, so concurrent submissions cannot reuse it. Successful setup or reset requires a fresh login and never changes roles or memberships. Expired, invalid, and already-used links return 400 `invalid_token` with a message telling the user to request a new link.
 
 `/api/auth/*` accepts browser requests only from the same origin or origins already registered for active apps, and never returns `Access-Control-Allow-Origin: *`. Rate limiting applies to login (10/min), forgot-password (5/min), and reset-password (10/min) per hashed account/token key; rejections return 429.
 
@@ -175,16 +175,16 @@ App IDs cannot be renamed. Inactive apps can still be administered. `origins` an
 | Method/path under `/api/admin` | Body / response |
 | --- | --- |
 | GET `/users` | `{users:[...],next_cursor}`; optional `after` UUID, 100 per page; includes memberships, never hashes |
-| POST `/users` | `{email,is_admin?}` → 201 user with no usable password; 409 on duplicate email |
+| POST `/users` | `{email,is_admin?}` → 201 user with no usable password; creates the account **and** sends its invitation; 409 on duplicate email; a delivery failure is reported in `invite`, not as success |
 | GET `/users/:id` | User plus memberships |
 | PATCH `/users/:id` | Any of `{active,is_admin}`; deactivation revokes sessions; last active admin returns 409 |
 | GET `/users/:id/memberships` | `{memberships:[{app_id,access}]}` |
 | POST `/users/:id/memberships` | `{app_id,access}` where access is `read` or `write`; idempotent upsert; 404 unknown app/user |
 | DELETE `/users/:id/memberships/:appId` | Remove; 204, or 404 when absent |
 | POST `/users/:id/revoke-sessions` | Revoke every session for the user; `{revoked}` |
-| POST `/users/:id/send-password-setup` | Email a single-use setup link; `{ok,expires_at}`; 503 when mail is unavailable |
+| POST `/users/:id/send-password-setup` | Email a single-use setup link; `{ok,purpose,expires_at,invite}`; `purpose` is `invite` for a passwordless account or `recovery` when a password already exists; rate limited; 409 for inactive users; 503 when mail is unavailable |
 
-User responses include `id`, `email`, `active`, `is_admin`, `has_password`, timestamps, and memberships. Password hashes, reset tokens, and session tokens are never returned or listed. New users have no usable password until they complete the emailed setup link (or an operator provisions one through [AUTH.md](AUTH.md#first-admin-bootstrap)). Deactivating a user immediately blocks login and invalidates existing sessions. The last active administrator cannot be demoted or deactivated.
+User responses include `id`, `email`, `active`, `is_admin`, `has_password`, timestamps, memberships, and an `invite` block: `{status,attempted_at,expires_at,error}` where `status` is `none`, `pending`, `expired`, `failed`, or `completed`. Password hashes, setup tokens, and session tokens are never returned or listed. New users have no usable password until they complete the emailed invitation (or an operator provisions one through [AUTH.md](AUTH.md#first-admin-bootstrap)); resending an invitation for an existing account preserves its role and memberships. Deactivating a user immediately blocks login, invalidates existing sessions, and prevents further setup links. The last active administrator cannot be demoted or deactivated.
 
 Token scopes must be a nonempty list drawn from `records:read`, `records:write`, `files:read`, `files:write`, `proxy:use`. Name is required, maximum 128 characters. Creation response contains `id`, `name`, `prefix`, `scopes`, `token`, `created_at`. List responses include `revoked_at` but never token plaintext or hashes. Tokens do not expire automatically.
 

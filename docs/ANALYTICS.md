@@ -166,6 +166,12 @@ Raw retention defaults to 90 days per Site (`raw_retention_days`, 1–3650). The
 
 ## Deployment
 
+> **Emergency/historical procedure — not the release path.** The pipeline deploys
+> this Worker after CFLab and verifies health, deployment identity, the service
+> binding, and the collect routes. Policy: [AGENTS.md](../AGENTS.md); release order
+> and rollback: [CI-CD.md](CI-CD.md). Use the commands below only when the pipeline
+> itself is blocked.
+
 ```sh
 # 1. Apply migrations (operational origin, then analytics schema)
 npx wrangler d1 migrations apply DB --remote --config wrangler.jsonc
@@ -193,6 +199,10 @@ Manual Cloudflare steps still required:
 Local development: `npm run dev` (CFLab) and `npm run dev:analytics` (Analytics). The service binding resolves to the locally running CFLab dev instance (both entrypoints export `HumanAuthService`); if CFLab is not running, private analytics APIs return `503 auth_unavailable`. To preview the dashboard locally, temporarily point the `cflab-auth-base` meta tag in `analytics-ui/index.html` at the local CFLab origin (for example `http://127.0.0.1:8787`) and add that origin to the `connect-src` directive in `analytics-ui/_headers`; restore both before deploying. The production CSP intentionally allows only `'self'` and `https://cflab.aismallbizguru.com`.
 
 ## Rollback
+
+> Rollback is a deliberate operator action, never automatic. See
+> [CI-CD.md → Rollback](CI-CD.md#rollback) for the commands, the limitation that
+> migrations are not rolled back, and [D1 recovery](CI-CD.md#d1-recovery).
 
 - **Analytics Worker:** `npx wrangler rollback <version-id> --name cflab-analytics --config wrangler.analytics.jsonc`.
 - **Routing:** remove the Analytics `routes` entries and redeploy; `lab.`/`cflab.` collect paths return to CFLab's legacy collector, which still exists and still writes the legacy tables. New-model tables and aggregates remain untouched.

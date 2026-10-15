@@ -94,6 +94,7 @@ jobs:
       # 4. Apply only the migrations the gate classified as additive, or that
       # carry an explicit content-matched operator approval.
       - name: Apply approved, additive D1 migrations
+        id: apply_migrations
         env:
           CLOUDFLARE_D1_API_TOKEN: ${{ secrets.CLOUDFLARE_D1_API_TOKEN }}
         run: node scripts/ci/migration-gate.mjs --apply
@@ -112,9 +113,8 @@ jobs:
             --tag "$GITHUB_SHA" \
             --message "CFLab release $GITHUB_SHA (workflow run $GITHUB_RUN_ID)" \
             2>&1 | tee "$RUNNER_TEMP/cflab-release/primary-deploy.log"
-          grep -oE 'Version ID: [0-9a-f-]+' "$RUNNER_TEMP/cflab-release/primary-deploy.log" | tail -1 \
-            > "$RUNNER_TEMP/cflab-release/primary-version.txt" \
-            || echo 'Version ID: not reported' > "$RUNNER_TEMP/cflab-release/primary-version.txt"
+          version=$(grep -oE 'Version ID: [0-9a-f-]+' "$RUNNER_TEMP/cflab-release/primary-deploy.log" | tail -1 | awk '{print $NF}' || true)
+          echo "version_id=${version:-not reported}" >> "$GITHUB_OUTPUT"
 
       # 6. Verify primary production read-only: health, deployment identity, the
       # authentication boundary, the public projections, and the cutover hostname.
@@ -136,9 +136,8 @@ jobs:
             --tag "$GITHUB_SHA" \
             --message "CFLab analytics release $GITHUB_SHA (workflow run $GITHUB_RUN_ID)" \
             2>&1 | tee "$RUNNER_TEMP/cflab-release/analytics-deploy.log"
-          grep -oE 'Version ID: [0-9a-f-]+' "$RUNNER_TEMP/cflab-release/analytics-deploy.log" | tail -1 \
-            > "$RUNNER_TEMP/cflab-release/analytics-version.txt" \
-            || echo 'Version ID: not reported' > "$RUNNER_TEMP/cflab-release/analytics-version.txt"
+          version=$(grep -oE 'Version ID: [0-9a-f-]+' "$RUNNER_TEMP/cflab-release/analytics-deploy.log" | tail -1 | awk '{print $NF}' || true)
+          echo "version_id=${version:-not reported}" >> "$GITHUB_OUTPUT"
 
       # 8. Verify Analytics production read-only: health, deployment identity,
       # dashboard assets, the CFLAB service binding, and both collect routes.
@@ -146,21 +145,21 @@ jobs:
         id: verify_analytics
         run: node scripts/verify-production.mjs --service analytics --revision "$GITHUB_SHA" --wait
 
-      # 9. Record the release and its revision identifiers even if a later step
-      # failed, so the run always states what reached production.
+      # 9. Record the release even if a later step failed. The verdict and the
+      # production state are derived from the step outcomes by
+      # scripts/ci/release-summary.mjs (covered by test/ci), so a failed or
+      # partial release can never be summarized as a success.
       - name: Record the release
         if: always()
-        run: |
-          {
-            echo '## CFLab release'
-            echo
-            echo "- revision: \`$GITHUB_SHA\`"
-            echo "- validation: ${{ needs.validate.result }}"
-            echo "- migration gate: ${{ steps.migrations.outcome }}"
-            echo "- primary deploy: ${{ steps.deploy_primary.outcome }} - $(cat "$RUNNER_TEMP/cflab-release/primary-version.txt" 2>/dev/null || echo 'not recorded')"
-            echo "- primary verification: ${{ steps.verify_primary.outcome }}"
-            echo "- analytics deploy: ${{ steps.deploy_analytics.outcome }} - $(cat "$RUNNER_TEMP/cflab-release/analytics-version.txt" 2>/dev/null || echo 'not recorded')"
-            echo "- analytics verification: ${{ steps.verify_analytics.outcome }}"
-            echo
-            echo 'Both Workers report the released revision at `GET /api/version`; rollback commands are in docs/CI-CD.md.'
-          } >> "$GITHUB_STEP_SUMMARY"
+        env:
+          REVISION: ${{ github.sha }}
+          VALIDATION: ${{ needs.validate.result }}
+          MIGRATION_CHECK: ${{ steps.migrations.outcome }}
+          MIGRATION_APPLY: ${{ steps.apply_migrations.outcome }}
+          PRIMARY_DEPLOY: ${{ steps.deploy_primary.outcome }}
+          PRIMARY_VERIFY: ${{ steps.verify_primary.outcome }}
+          ANALYTICS_DEPLOY: ${{ steps.deploy_analytics.outcome }}
+          ANALYTICS_VERIFY: ${{ steps.verify_analytics.outcome }}
+          PRIMARY_VERSION: ${{ steps.deploy_primary.outputs.version_id }}
+          ANALYTICS_VERSION: ${{ steps.deploy_analytics.outputs.version_id }}
+        run: node scripts/ci/release-summary.mjs

@@ -65,6 +65,19 @@ Nothing in local setup, `npm run check`, local migrations, or `build` deploys re
 
 GET-only remote comparison is explicit: `npm run test:compat` requires `LABBOX_BASE_URL` and `CFLAB_BASE_URL`. It is excluded from normal tests and CI. See [remote checks](docs/DEPLOYMENT.md#read-only-parallel-checks) for record/collection fixtures, read tokens, optional anonymous/CORS checks, and the separate legacy-health safety gate. Normal checks test the probe harness offline without contacting either deployment.
 
+## Releases
+
+Production is released by **GitHub Actions**, not from a developer machine:
+push to `main` → validate → deploy both Workers → verify production. Releases are
+gated by the repository variable `CLOUDFLARE_DEPLOY_ENABLED`, and every release is
+tied to a commit that passed CI. `npm run deploy` deliberately refuses and prints
+the policy; direct Wrangler deployment is reserved for documented emergencies.
+
+Read **[AGENTS.md](AGENTS.md)** before changing anything — it is the entry point for
+coding agents and states the release, migration, and data-handling rules. The
+runbook (release order, migration approvals, verification, rollback, D1 recovery,
+emergency deployment) is [docs/CI-CD.md](docs/CI-CD.md).
+
 ## Project map
 
 `src/app.ts` composes routing, errors, logging, CORS, and app authentication. `src/routes/` holds straightforward SQL-backed handlers. `src/auth/` holds machine tokens, human sessions, password hashing, mail, rate-limit helpers, and the internal `HumanAuthService` entrypoint. `src/analytics/` is the separate Analytics Worker (collector, site API, reporting, maintenance, sanitization). `src/ui.ts` holds the small server-rendered account pages. `src/proxy/` contains URL/DNS policy. `analytics-ui/` is the analytics dashboard and tracking script. `migrations/` and `migrations-analytics/` own the two D1 schemas. `test/` exercises behavior. [ARCHITECTURE.md](docs/ARCHITECTURE.md) explains the boundaries and intentional limitations; [AUTH.md](docs/AUTH.md) documents the human identity model and bootstrap; [ANALYTICS.md](docs/ANALYTICS.md) documents the analytics service.

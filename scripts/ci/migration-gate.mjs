@@ -258,6 +258,7 @@ function blockedMessage(database, blocked) {
     `  2. Record the exact content hash: node scripts/ci/migration-gate.mjs --print-hash ${db.migrationsDir}/<file>`,
     `  3. Add an entry to ${APPROVALS_PATH} with "database": "${db.name}", "file", "sha256", "reason", "approved_by", and "approved_at", then merge it. Editing an approved file invalidates its approval.`,
     `  4. Or apply it deliberately and re-run this pipeline: CLOUDFLARE_API_TOKEN=$CLOUDFLARE_D1_API_TOKEN npx wrangler d1 migrations apply ${db.name} --remote --config ${db.config}`,
+    '     Record the Time Travel bookmark first and verify production afterwards (docs/CI-CD.md#d1-recovery); releases normally come from GitHub Actions.',
     '  D1 captures a backup before applying and rolls back a failed migration, so a blocked migration leaves the database unchanged.',
   ].join('\n');
 }

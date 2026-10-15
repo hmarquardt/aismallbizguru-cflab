@@ -177,6 +177,12 @@ failure handling — not live delivery.
 
 ## 4. Apply migrations and publish explicitly
 
+> **Emergency/historical procedure — not the release path.** Routine releases are
+> published by [GitHub Actions](CI-CD.md#release-order); the policy is
+> [AGENTS.md](../AGENTS.md). Use the commands below only when the pipeline itself
+> is blocked, from a clean checkout whose `HEAD` equals `origin/main`, and never
+> with uncommitted work. `npm run deploy` refuses and prints the same policy.
+
 Review the account ID, D1 ID, bucket ownership, and sole Custom Domain again, then run:
 
 ```sh
@@ -236,6 +242,10 @@ Validate with a GET using the plaintext token (`Authorization: Bearer $TOKEN`) a
 
 ## 6. Rollback for this stage
 
+> **Rollback is a deliberate operator action.** The pipeline never rolls back by
+> itself. Version rollback, its limitations, and D1 recovery are documented in
+> [CI-CD.md](CI-CD.md#rollback) and [CI-CD.md](CI-CD.md#d1-recovery).
+
 No client depends on CFLab yet, so rollback touches only CFLab resources. LabBox DNS, routes, service, and data need no action.
 
 - **Routing:** remove the `routes` entry from `wrangler.jsonc` and rerun `npx wrangler deploy --config wrangler.jsonc --no-x-provision`. This detaches `cflab.aismallbizguru.com` and leaves the Worker, D1, R2, and data in place. Do not edit `lab` DNS or routes.
@@ -244,6 +254,11 @@ No client depends on CFLab yet, so rollback touches only CFLab resources. LabBox
 - **Teardown (requires separate authorization):** `npx wrangler delete --name cflab --config wrangler.jsonc` removes only the Worker. D1 `cflab` and R2 `cflab-files` are separate and survive until deliberately deleted. Never delete, rename, or repurpose LabBox resources.
 
 ## 7. Analytics Worker deployment
+
+> **Emergency/historical procedure — not the release path.** The pipeline deploys
+> this Worker after CFLab and verifies it
+> ([release order](CI-CD.md#release-order)); see [AGENTS.md](../AGENTS.md). Use the
+> commands below only when the pipeline itself is blocked.
 
 The Analytics Worker (`cflab-analytics`, `wrangler.analytics.jsonc`, entrypoint `src/analytics/index.ts`) is a second deployment that shares the existing `cflab-analytics` D1 database. Deploy CFLab first so the `HumanAuthService` named entrypoint exists, then:
 

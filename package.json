@@ -9,6 +9,7 @@
   "scripts": {
     "dev": "wrangler dev --config wrangler.local.jsonc --ip 127.0.0.1",
     "dev:analytics": "wrangler dev --config wrangler.analytics.local.jsonc --ip 127.0.0.1",
+    "deploy": "node scripts/ci/refuse-direct-deploy.mjs",
     "db:migrate": "wrangler d1 migrations apply DB --local --config wrangler.local.jsonc",
     "db:migrate:analytics": "wrangler d1 migrations apply ANALYTICS --local --config wrangler.analytics.local.jsonc",
     "types": "wrangler types",

@@ -6,7 +6,9 @@ repository, and — only when production deployment is deliberately enabled —
 applies safe D1 migrations, publishes both Workers, and verifies production
 read-only. Developer-machine `wrangler deploy` remains available as an emergency
 procedure (see [Emergency manual deployment](#emergency-manual-deployment)), but
-it is no longer the normal path.
+it is no longer the normal path. The rules themselves — what an agent or an
+operator must and must not do — are stated in [AGENTS.md](../AGENTS.md), and
+`npm run deploy` refuses and prints them rather than deploying anything.
 
 Two Workers are released together:
 
@@ -101,9 +103,13 @@ The deploy job follows one fixed order, and stops at the first failure:
    entrypoint that already exists in the new CFLab version.
 8. **Analytics production verified** — health, deployment identity, dashboard
    assets, the CFLab service binding, and both collect routes.
-9. **Release recorded** — the run summary states the revision, each step's
-   outcome, and the Cloudflare version ID of each deploy (also shown in the
-   Cloudflare dashboard as the version tag).
+9. **Release recorded** — `scripts/ci/release-summary.mjs` writes a summary whose
+   **verdict** (`SUCCESS`, `FAILED`, or `INCOMPLETE`) and production-state line are
+   derived from the actual step outcomes, so a failed or partial release can never
+   read as a success. It names which Worker is live, which is not, whether the
+   revision was verified, and each Cloudflare version ID (also shown in the
+   Cloudflare dashboard as the version tag). The verdict logic is covered by
+   `test/ci/release-summary.test.mjs`.
 
 One release runs at a time (`concurrency: release-<ref>`,
 `cancel-in-progress: false`), so two pushes cannot interleave deployments and an
@@ -220,10 +226,15 @@ intended release is live".
   ```sh
   node scripts/verify-production.mjs --service all
   node scripts/verify-production.mjs --service cflab --revision <sha>
+  node scripts/verify-drift.mjs
   ```
 
   Without `--revision` the identity checks still confirm the service and report
   the deployed revision. These commands make no changes.
+* **Drift check:** run the `production drift check` workflow (Actions →
+  `production drift check` → Run workflow), or `node scripts/verify-drift.mjs`
+  locally. It runs daily on its own and reports whether production is on a
+  revision published from `main`.
 * **Inspect the pending migration decision locally** (needs the D1 token in the
   environment; it never applies anything without `--apply`):
 
@@ -318,6 +329,30 @@ npx wrangler d1 time-travel restore ANALYTICS --config wrangler.analytics.jsonc 
 * Restoring data is always a deliberate operator action. No workflow, migration,
   or script in this repository restores, drops, truncates, or seeds a database.
 
+## Drift detection
+
+`scripts/verify-drift.mjs` (and the scheduled, read-only
+`.github/workflows/drift.yml`) answers one question without any credential: **is
+production running a revision that was published from `main`?** Both Workers
+report their released revision at `GET /api/version`, so the check only reads two
+public endpoints and then compares that revision against this clone's history
+(the workflow checks out with `fetch-depth: 0`).
+
+| Situation | Verdict | Result |
+| --- | --- | --- |
+| Production equals `main` | `in-sync` | pass |
+| Production is an ancestor of `main` | `behind` | pass — a release is pending, which is normal |
+| Production's revision is not in `main`'s history | `drift` | **fail** — it was not published from `main` |
+| The two Workers are on different revisions | `split` | **fail** — a release was interrupted or one Worker was deployed by hand |
+| A Worker reports `unknown` or an unusable revision | `unknown-revision` | **fail** — not published by this pipeline |
+| Ancestry could not be checked in this clone | `unverified` | **fail** — never assumed to be fine |
+
+Run it locally with `node scripts/verify-drift.mjs` (optionally
+`--main origin/main`, `--primary <origin>`, `--analytics <origin>`). Being behind
+is reported as information; only divergence, a split, or an unreported revision
+fails. The scheduled run has `permissions: contents: read`, uses no secrets, and
+cannot deploy or write anything.
+
 ## Rollback
 
 Cloudflare keeps every published version, so rollback is a version deploy:
@@ -357,6 +392,9 @@ and keep the same order and checks:
 
 ```sh
 git fetch origin && git switch main && git pull --ff-only
+# Preconditions: no uncommitted work, and HEAD is exactly what GitHub has.
+git status --porcelain           # must print nothing
+git rev-parse HEAD origin/main   # must print the same SHA twice
 npm ci
 npm run check
 node scripts/ci/verify-deployment-target.mjs --config-only
@@ -377,7 +415,9 @@ Keep `--no-x-provision` (never provision replacements), keep `--tag` (so the
 release stays identifiable), never deploy `wrangler.local.jsonc` or `src/local.ts`,
 and never edit DNS, routes, R2 objects, or secrets as part of an emergency deploy.
 Record the manual deploy in the next commit message so the repository keeps the
-release history.
+release history. `npm run deploy` deliberately refuses; this section is the only
+place these commands are documented, and they exist for a blocked pipeline rather
+than for convenience.
 
 ## Known limitations and drift
 

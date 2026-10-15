@@ -294,8 +294,9 @@ async function main() {
     if (after.status !== 0) throw new GateError(`Could not confirm the migration state for ${db.label} (${db.name}):\n${after.output.trim()}`);
     const remaining = parsePendingMigrations(after.output);
     if (remaining.length) throw new GateError(`Migrations are still pending for ${db.label} (${db.name}) after applying: ${remaining.join(', ')}`);
-    console.log(`OK    ${db.label} (${db.name}): applied ${entries.length} additive migration(s) and confirmed none remain pending`);
-    summary.push(`- ${db.label} (\`${db.name}\`): applied ${entries.length} additive migration(s): ${entries.map(entry => entry.file).join(', ')}`);
+    const approvedCount = entries.filter(entry => entry.approved).length;
+    console.log(`OK    ${db.label} (${db.name}): applied ${entries.length} migration(s)${approvedCount ? ` (${approvedCount} with an operator approval)` : ''} and confirmed none remain pending`);
+    summary.push(`- ${db.label} (\`${db.name}\`): applied ${entries.length} migration(s)${approvedCount ? ` (${approvedCount} approved)` : ''}: ${entries.map(entry => entry.file).join(', ')}`);
   }
   writeSummary(summary);
 }

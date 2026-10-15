@@ -1,0 +1,12 @@
+{
+  "$comment": [
+    "Explicit operator approvals for D1 migrations that the release pipeline will not",
+    "apply automatically. The gate classifies every pending migration; anything it cannot",
+    "prove additive is blocked unless an entry here matches the database, the exact file",
+    "name, and the SHA-256 of the file's content (node scripts/ci/migration-gate.mjs",
+    "--print-hash <file>). Editing an approved file invalidates its approval, so an",
+    "approval can never cover unreviewed SQL. Every entry needs database, file, sha256,",
+    "reason, approved_by, and approved_at. See docs/CI-CD.md for the review checklist."
+  ],
+  "approved": []
+}

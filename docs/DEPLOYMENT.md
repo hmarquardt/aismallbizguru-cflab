@@ -12,6 +12,25 @@ Target: **https://cflab.aismallbizguru.com**. This is CFLab's lasting production
 
 These names already exist in the project configuration and are reserved for CFLab. Do not substitute the old SQLite store, MinIO bucket, or LabBox R2 backup bucket. Resource ownership must be checked in your account before using an existing name; if a name is occupied by unrelated data, stop and select a distinct CFLab name rather than repurposing it.
 
+## Continuous deployment (GitHub Actions)
+
+Releases are published by `.github/workflows/ci.yml`, not from a developer
+machine. A push to `main` validates the repository and — only when the repository
+variable `CLOUDFLARE_DEPLOY_ENABLED` is `true` — applies safe D1 migrations,
+deploys both Workers with `--no-x-provision`, and verifies production read-only.
+Pull requests validate without deploying. The release order, required secrets and
+variables, migration approval policy, rollback commands, and the steps required
+before the first automated release are in [CI-CD.md](CI-CD.md). The manual
+commands in this document remain the emergency path and the record of how these
+resources were created.
+
+**Read the audit blocker in
+[CI-CD.md](CI-CD.md#enabling-the-first-automated-release) before enabling
+deployment.** The currently deployed `cflab` Worker was published from a working
+tree that includes uncommitted email/invitation work, so deploying the current
+`main` would remove the `EMAIL` binding and the invitation flow from production.
+The release preflight refuses that release deliberately rather than regressing it.
+
 ## 1. Verify account and hostname ownership
 
 Run from this repository:

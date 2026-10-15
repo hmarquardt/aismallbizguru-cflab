@@ -4,6 +4,7 @@ import { ApiError } from '../http';
 import { collector } from './collector';
 import { sites } from './api';
 import { runMaintenance } from './maintenance';
+import { deploymentIdentity } from '../shared/revision';
 
 export const app = new Hono<AnalyticsEnv>({ strict: false });
 
@@ -43,6 +44,8 @@ app.onError((error, c) => {
 app.notFound(c => c.json({ error: { code: 'not_found', message: 'Route not found' } }, 404));
 
 app.get('/api/health', c => c.json({ status: 'ok', service: 'cflab-analytics' }));
+// Non-sensitive deployment identity for the release pipeline. See src/shared/revision.ts.
+app.get('/api/version', c => c.json(deploymentIdentity('cflab-analytics', c.env)));
 app.route('/', collector);
 app.route('/api/sites', sites);
 

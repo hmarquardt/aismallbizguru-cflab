@@ -11,6 +11,7 @@ import { publicSafari } from './routes/public-safari';
 import { analytics } from './routes/analytics';
 import { publicTopHat } from './routes/public-top-hat';
 import { accountPage, forgotPage, loginPage, resetPage, usersPage } from './ui';
+import { deploymentIdentity } from './shared/revision';
 
 const methods = ['GET', 'POST', 'PATCH', 'DELETE'];
 const allowedHeaders = ['authorization', 'content-type', 'x-filename', 'x-file-id', 'x-record-id', 'x-resource'];
@@ -42,6 +43,8 @@ export function createApp(adminAuth: MiddlewareHandler<ContextEnv>) {
   });
   app.notFound(c => c.json({ error: { code: 'not_found', message: 'Route not found' } }, 404));
   app.get('/api/health', c => c.json({ status: 'ok', service: 'cflab' }));
+  // Non-sensitive deployment identity for the release pipeline. See src/shared/revision.ts.
+  app.get('/api/version', c => c.json(deploymentIdentity('cflab', c.env)));
   app.use('/api/auth/*', authCors);
   app.route('/api/auth', auth);
   app.route('/api/public/wildlife-safari', publicSafari);

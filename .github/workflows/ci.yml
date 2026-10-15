@@ -1,0 +1,166 @@
+name: validate and deploy
+
+# Every push to main and every pull request is validated. A push to main also
+# deploys both production Workers, but only when the repository variable
+# CLOUDFLARE_DEPLOY_ENABLED is exactly "true". With it unset or false, the deploy
+# job is skipped and validation still runs: a push never publishes by itself.
+# See docs/CI-CD.md for the release runbook, migration policy, and rollback.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One production release at a time. An in-progress release is never cancelled, so
+# a deploy is never interrupted after it has started changing production.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # Account ID is public configuration (it is in wrangler.jsonc), not a secret.
+  CLOUDFLARE_ACCOUNT_ID: b1aa310aa0a1638d72b8b086a21e557c
+
+jobs:
+  validate:
+    name: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      # Typecheck, vendored asset check, Workers-compatible Vitest suite, dashboard
+      # tests, the offline remote-probe harness, the migration harness, and the
+      # release-tooling tests.
+      - run: npm run check
+      # Apply both schemas to ephemeral local D1 storage so the migration files
+      # themselves are exercised before any release.
+      - run: npm run db:migrate
+      - run: npm run db:migrate:analytics
+      # Dry-run bundles for both Workers. Nothing is uploaded.
+      - run: npm run build
+      - run: npm run build:analytics
+      - uses: actions/upload-artifact@v7
+        with:
+          name: cflab-build
+          path: |
+            dist
+            dist-analytics
+
+  deploy:
+    name: deploy production
+    needs: validate
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      github.event_name != 'pull_request' &&
+      vars.CLOUDFLARE_DEPLOY_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - uses: actions/download-artifact@v8
+        with:
+          name: cflab-build
+
+      # 1. Confirm validation succeeded (needs: validate) and 2. verify the
+      # deployment target, the validated bundles, and the required credentials.
+      - name: Verify the deployment target and credentials
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_D1_API_TOKEN: ${{ secrets.CLOUDFLARE_D1_API_TOKEN }}
+        run: node scripts/ci/verify-deployment-target.mjs
+
+      # 3. Check pending migrations for both D1 databases and classify each one.
+      # Unsafe or unrecognized migrations stop the release here.
+      - name: Check pending D1 migrations for both databases
+        id: migrations
+        env:
+          CLOUDFLARE_D1_API_TOKEN: ${{ secrets.CLOUDFLARE_D1_API_TOKEN }}
+        run: node scripts/ci/migration-gate.mjs
+
+      # 4. Apply only the migrations the gate classified as additive, or that
+      # carry an explicit content-matched operator approval.
+      - name: Apply approved, additive D1 migrations
+        env:
+          CLOUDFLARE_D1_API_TOKEN: ${{ secrets.CLOUDFLARE_D1_API_TOKEN }}
+        run: node scripts/ci/migration-gate.mjs --apply
+
+      # 5. Publish the primary Worker. --no-x-provision forbids implicit resource
+      # creation, and the tag records which revision this version is.
+      - name: Deploy the primary CFLab Worker
+        id: deploy_primary
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/cflab-release"
+          npx wrangler deploy --config wrangler.jsonc --no-x-provision \
+            --var "DEPLOY_REVISION:$GITHUB_SHA" \
+            --tag "$GITHUB_SHA" \
+            --message "CFLab release $GITHUB_SHA (workflow run $GITHUB_RUN_ID)" \
+            2>&1 | tee "$RUNNER_TEMP/cflab-release/primary-deploy.log"
+          grep -oE 'Version ID: [0-9a-f-]+' "$RUNNER_TEMP/cflab-release/primary-deploy.log" | tail -1 \
+            > "$RUNNER_TEMP/cflab-release/primary-version.txt" \
+            || echo 'Version ID: not reported' > "$RUNNER_TEMP/cflab-release/primary-version.txt"
+
+      # 6. Verify primary production read-only: health, deployment identity, the
+      # authentication boundary, the public projections, and the cutover hostname.
+      - name: Verify primary CFLab production
+        id: verify_primary
+        run: node scripts/verify-production.mjs --service cflab --revision "$GITHUB_SHA" --wait
+
+      # 7. Publish the Analytics Worker. CFLab is deployed first so the
+      # HumanAuthService entrypoint the service binding needs already exists.
+      - name: Deploy the Analytics Worker
+        id: deploy_analytics
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/cflab-release"
+          npx wrangler deploy --config wrangler.analytics.jsonc --no-x-provision \
+            --var "DEPLOY_REVISION:$GITHUB_SHA" \
+            --tag "$GITHUB_SHA" \
+            --message "CFLab analytics release $GITHUB_SHA (workflow run $GITHUB_RUN_ID)" \
+            2>&1 | tee "$RUNNER_TEMP/cflab-release/analytics-deploy.log"
+          grep -oE 'Version ID: [0-9a-f-]+' "$RUNNER_TEMP/cflab-release/analytics-deploy.log" | tail -1 \
+            > "$RUNNER_TEMP/cflab-release/analytics-version.txt" \
+            || echo 'Version ID: not reported' > "$RUNNER_TEMP/cflab-release/analytics-version.txt"
+
+      # 8. Verify Analytics production read-only: health, deployment identity,
+      # dashboard assets, the CFLAB service binding, and both collect routes.
+      - name: Verify Analytics production
+        id: verify_analytics
+        run: node scripts/verify-production.mjs --service analytics --revision "$GITHUB_SHA" --wait
+
+      # 9. Record the release and its revision identifiers even if a later step
+      # failed, so the run always states what reached production.
+      - name: Record the release
+        if: always()
+        run: |
+          {
+            echo '## CFLab release'
+            echo
+            echo "- revision: \`$GITHUB_SHA\`"
+            echo "- validation: ${{ needs.validate.result }}"
+            echo "- migration gate: ${{ steps.migrations.outcome }}"
+            echo "- primary deploy: ${{ steps.deploy_primary.outcome }} - $(cat "$RUNNER_TEMP/cflab-release/primary-version.txt" 2>/dev/null || echo 'not recorded')"
+            echo "- primary verification: ${{ steps.verify_primary.outcome }}"
+            echo "- analytics deploy: ${{ steps.deploy_analytics.outcome }} - $(cat "$RUNNER_TEMP/cflab-release/analytics-version.txt" 2>/dev/null || echo 'not recorded')"
+            echo "- analytics verification: ${{ steps.verify_analytics.outcome }}"
+            echo
+            echo 'Both Workers report the released revision at `GET /api/version`; rollback commands are in docs/CI-CD.md.'
+          } >> "$GITHUB_STEP_SUMMARY"

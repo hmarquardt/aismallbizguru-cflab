@@ -62,6 +62,23 @@ describe('health and administration', () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ status: 'ok', service: 'cflab' });
   });
+  it('reports an unknown deployment revision when no release revision is configured', async () => {
+    const response = await exports.default.fetch('https://example.com/api/version');
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ service: 'cflab', revision: 'unknown' });
+  });
+  it('reports the release revision supplied by the deployment pipeline', async () => {
+    const releaseEnv = { ...bindings, DEPLOY_REVISION: 'f406792bf53cff4c4648b941dcb6c81b66d460f3' } as Bindings;
+    const response = await production.fetch(new Request('https://cflab.aismallbizguru.com/api/version'), releaseEnv);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ service: 'cflab', revision: 'f406792bf53cff4c4648b941dcb6c81b66d460f3' });
+  });
+  it('never echoes an unexpected deployment revision value', async () => {
+    const releaseEnv = { ...bindings, DEPLOY_REVISION: 'not a revision!; DROP TABLE apps' } as Bindings;
+    const response = await production.fetch(new Request('https://cflab.aismallbizguru.com/api/version'), releaseEnv);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ service: 'cflab', revision: 'unknown' });
+  });
   it('production rejects even valid local admin credentials', async () => {
     const response = await production.fetch(new Request('http://localhost/api/admin/apps', { headers: { Authorization: `Bearer ${adminSecret}` } }), testEnv);
     expect(response.status).toBe(401);

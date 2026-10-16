@@ -99,7 +99,7 @@ created by this phase.
 | --- | --- | --- |
 | Accidental row change or deletion | minutes (Time Travel, 30 days) | < 15 min |
 | Bad migration | to just before the migration (record the bookmark first, §6.3) | < 15 min |
-| Database corruption or loss | ≤ 24 h (daily logical backup) | **measured: 2 m 09 s** to restore both databases into new D1 databases and verify them (§7.1) |
+| Database corruption or loss | ≤ 24 h (daily logical backup) | **measured: 2 m 14 s** to restore both databases into new D1 databases and verify them (§7.1) |
 | Accidental object deletion or replacement | ≤ 24 h (mirror run), any earlier version preserved | seconds to recover one object from the mirror (§7.4) |
 | Full loss of the Cloudflare account | ≤ 24 h, and only if the backup bucket is exported off-account | hours — out of scope, documented as a limitation (§6.4) |
 
@@ -562,7 +562,7 @@ which `wrangler d1 list` showed only `cflab` and `cflab-analytics`.
 
 | Phase | Duration |
 | --- | --- |
-| Whole drill job, both databases, end to end | **2 m 09 s** |
+| Whole drill job, both databases, end to end (download, both local restores, both temporary databases, both remote restores, both verifications, evidence upload) | **2 m 14 s** |
 | Import into a real D1 database (`restore_ms` in the report) | ~10 s per database |
 | Verification including all per-table row hashes (`verify_ms`) | ~15–25 s per database |
 | Isolated local restore (runs on every daily backup) | 8.2 s (`cflab`), ~4 s (analytics) |

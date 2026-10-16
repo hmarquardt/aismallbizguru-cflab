@@ -169,7 +169,10 @@ async function main() {
     ].join('\n'));
     return;
   }
-  const source = sourceClientFromEnvironment();
+  // The source is only needed to plan or copy; verification reads the backup
+  // bucket alone, so an operator with only the backup credentials can run it.
+  const needsSource = !args.includes('--verify');
+  const source = needsSource ? sourceClientFromEnvironment() : null;
   const destination = r2FromEnvironment();
   const limitIndex = args.indexOf('--limit');
   const limit = limitIndex === -1 ? undefined : Number(args[limitIndex + 1]);

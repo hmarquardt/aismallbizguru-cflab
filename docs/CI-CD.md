@@ -421,6 +421,12 @@ than for convenience.
 
 ## Known limitations and drift
 
+* **Backups are implemented but not activated.** The scheduled backup workflow is
+  gated by `CFLAB_BACKUPS_ENABLED` and needs the operator to create the backup
+  bucket and credentials first
+  ([BACKUP-RESTORE.md §5](BACKUP-RESTORE.md#5-credentials-and-cloudflare-setup)).
+  Until then, D1 Time Travel is the only recovery mechanism, and `cflab-files` has
+  no protection against an accidental delete or overwrite.
 * **Source and production are reconciled (2026-10-15).** The email/invitation work
   is committed (`9dad7ba`) and matches the live deployment; `main` is ahead of
   production only by the additive `GET /api/version` route, so the first release

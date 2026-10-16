@@ -18,13 +18,14 @@
     "test:ui": "node --test test/ui/*.test.mjs",
     "test:compat": "node --test test/remote/compat.remote.mjs",
     "test:compat:harness": "node --test test/remote/probes.test.mjs",
-    "check": "npm run typecheck && npm run verify:chart && npm test && npm run test:ui && npm run test:compat:harness && npm run test:migration && npm run test:ci",
+    "check": "npm run typecheck && npm run verify:chart && npm test && npm run test:ui && npm run test:compat:harness && npm run test:migration && npm run test:ci && npm run test:backup",
     "vendor:chart": "node scripts/vendor-chart.mjs",
     "verify:chart": "node scripts/vendor-chart.mjs verify",
     "build": "wrangler deploy --dry-run --outdir dist",
     "build:analytics": "wrangler deploy --dry-run --outdir dist-analytics --config wrangler.analytics.jsonc",
     "test:migration": "node --test test/migration/*.test.ts",
-    "test:ci": "node --test test/ci/*.test.mjs"
+    "test:ci": "node --test test/ci/*.test.mjs",
+    "test:backup": "node --test test/backup/*.test.mjs"
   },
   "dependencies": {
     "hono": "4.13.8"

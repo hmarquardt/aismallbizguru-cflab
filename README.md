@@ -76,7 +76,8 @@ the policy; direct Wrangler deployment is reserved for documented emergencies.
 Read **[AGENTS.md](AGENTS.md)** before changing anything — it is the entry point for
 coding agents and states the release, migration, and data-handling rules. The
 runbook (release order, migration approvals, verification, rollback, D1 recovery,
-emergency deployment) is [docs/CI-CD.md](docs/CI-CD.md).
+emergency deployment) is [docs/CI-CD.md](docs/CI-CD.md), and backup, retention, and
+recovery are documented in [docs/BACKUP-RESTORE.md](docs/BACKUP-RESTORE.md).
 
 ## Project map
 

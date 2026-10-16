@@ -1,0 +1,139 @@
+name: production backups
+
+# Scheduled, credential-gated backup of both D1 databases and the production file
+# bucket. Nothing here deploys, migrates, or writes to production: the D1 job only
+# reads (export + read-only introspection) and the R2 job only reads production
+# objects. All writes go to the dedicated backup bucket.
+#
+# The schedule stays inert until the repository variable CFLAB_BACKUPS_ENABLED is
+# exactly "true", so no job runs with backup credentials before the bucket, the
+# tokens, and the retention rules have been reviewed. See docs/BACKUP-RESTORE.md.
+
+on:
+  schedule:
+    # Daily, after the drift check, and offset from the hour.
+    - cron: '37 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-backups
+  cancel-in-progress: false
+
+env:
+  CLOUDFLARE_ACCOUNT_ID: b1aa310aa0a1638d72b8b086a21e557c
+
+jobs:
+  d1:
+    name: D1 backups
+    if: vars.CFLAB_BACKUPS_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+
+      # 1. Read the live schema and row counts, then export each database.
+      - name: Export both databases
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CFLAB_BACKUP_D1_TOKEN }}
+        run: node scripts/backup/d1-export.mjs --out backups
+
+      # 2. A backup is not a backup until a restore has succeeded: every export is
+      # restored into an isolated local database and compared with its manifest.
+      - name: Restore each export into an isolated database and verify it
+        run: |
+          set -euo pipefail
+          for manifest in backups/*.manifest.json; do
+            node scripts/backup/restore-verify.mjs \
+              --manifest "$manifest" \
+              --work-dir backups/restore \
+              --report "backups/restore-$(basename "$manifest" .manifest.json).json"
+          done
+
+      # 3. Upload only the verified artifacts. Date-stamped keys and a
+      # never-overwrite check mean an existing backup cannot be replaced.
+      - name: Upload the verified backups
+        env:
+          CFLAB_BACKUP_BUCKET: ${{ vars.CFLAB_BACKUP_BUCKET }}
+          R2_ACCESS_KEY_ID: ${{ secrets.CFLAB_BACKUP_R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.CFLAB_BACKUP_R2_SECRET_ACCESS_KEY }}
+        run: node scripts/backup/upload-backups.mjs --dir backups --report backups/upload-report.json
+
+      # 4. Fail the run when either database has no backup inside the freshness
+      # window, so a silent backup outage becomes a red workflow.
+      - name: Report backup freshness
+        env:
+          CFLAB_BACKUP_BUCKET: ${{ vars.CFLAB_BACKUP_BUCKET }}
+          R2_ACCESS_KEY_ID: ${{ secrets.CFLAB_BACKUP_R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.CFLAB_BACKUP_R2_SECRET_ACCESS_KEY }}
+        run: node scripts/backup/backup-status.mjs --max-age-hours 30 --json
+
+      - name: Record the backup run
+        if: always()
+        run: |
+          {
+            echo '## CFLab backups'
+            echo
+            for report in backups/*.manifest.json; do
+              [ -e "$report" ] || continue
+              node -e "const m=require('./'+process.argv[1]);console.log('- '+m.database+': '+m.bytes+' bytes, sha256 '+m.sha256.slice(0,16)+'…, '+m.tables.length+' tables, captured '+m.captured_at)" "$report" >> "$GITHUB_STEP_SUMMARY"
+            done
+            for report in backups/restore-*.json; do
+              [ -e "$report" ] || continue
+              node -e "const r=require('./'+process.argv[1]);console.log('- restored '+r.database+' ('+r.mode+'): quick_check='+r.quickCheck+', foreign_key_violations='+r.foreignKeyViolations+', restore '+r.restore_ms+' ms')" "$report" >> "$GITHUB_STEP_SUMMARY"
+            done
+            echo
+            echo 'A failed stage means at least one database is not backed up inside its freshness window; see docs/BACKUP-RESTORE.md.'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  files:
+    name: R2 file mirror
+    if: vars.CFLAB_BACKUPS_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+
+      # Append-only, content-addressed copy of every production object version.
+      # Deleting or replacing an object in production cannot propagate here.
+      - name: Mirror production objects
+        env:
+          CFLAB_BACKUP_BUCKET: ${{ vars.CFLAB_BACKUP_BUCKET }}
+          CFLAB_FILES_BUCKET: cflab-files
+          R2_ACCESS_KEY_ID: ${{ secrets.CFLAB_BACKUP_R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.CFLAB_BACKUP_R2_SECRET_ACCESS_KEY }}
+        run: node scripts/backup/r2-mirror.mjs --apply --limit 500 --report backups/r2-mirror.json
+
+      - name: Verify a sample of the mirrored objects
+        env:
+          CFLAB_BACKUP_BUCKET: ${{ vars.CFLAB_BACKUP_BUCKET }}
+          R2_ACCESS_KEY_ID: ${{ secrets.CFLAB_BACKUP_R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.CFLAB_BACKUP_R2_SECRET_ACCESS_KEY }}
+        run: node scripts/backup/r2-mirror.mjs --verify --manifest backups/r2-mirror.json --sample 25
+
+      - name: Record the mirror run
+        if: always()
+        run: |
+          {
+            echo '## CFLab file mirror'
+            echo
+            if [ -e backups/r2-mirror.json ]; then
+              node -e "const m=require('./backups/r2-mirror.json');console.log('- source objects: '+m.source_objects+', mirrored: '+m.mirrored_objects+', copied this run: '+m.copied_this_run+', manifest '+m.stamp)" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo '- no mirror manifest was produced; the mirror did not complete' >> "$GITHUB_STEP_SUMMARY"
+            fi
+            echo
+            echo 'The mirror is append-only: it never deletes, and a production deletion or replacement cannot propagate into it.'
+          } >> "$GITHUB_STEP_SUMMARY"

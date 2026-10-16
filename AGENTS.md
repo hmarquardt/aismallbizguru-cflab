@@ -42,6 +42,14 @@ commands are in [DEPLOYMENT.md](docs/DEPLOYMENT.md).
   approval in `.github/d1-migration-approvals.json`, and remote migrations must
   never be applied outside the pipeline without recording the Time Travel
   bookmark first (see [CI-CD.md → D1 recovery](docs/CI-CD.md#d1-recovery)).
+* **Backups are the last line of defence, and they are verified by restoring.**
+  Both D1 databases are exported daily and restored into an isolated database
+  before anything is uploaded; `cflab-files` is mirrored append-only and
+  content-addressed so a deletion or replacement cannot propagate. Never delete,
+  overwrite, or "tidy" a stored backup, never write backups into `cflab-files`,
+  and never restore into a production database as part of a test. The procedures
+  and the retention policy are in
+  [BACKUP-RESTORE.md](docs/BACKUP-RESTORE.md).
 
 ## What an agent must not do
 
@@ -51,6 +59,11 @@ commands are in [DEPLOYMENT.md](docs/DEPLOYMENT.md).
   --remote` with writes, or any database reset, seed, or destructive statement.
 * Do not modify production data, R2 objects, DNS records, routes, or Cloudflare
   secrets.
+* Do not delete or overwrite objects in `cflab-files`, in the backup bucket, or in
+  the legacy LabBox archive bucket; do not run a database restore against
+  production as a test; do not treat an unverified backup as a backup.
+* Do not delete legacy archives. `labs-smallbizguru-backups` holds the only
+  pre-cutover LabBox history and is out of scope until a separate decision.
 * Do not commit credentials, `.dev.vars`, `.env*` files, or generated secrets;
   `.dev.vars.example` documents the shape only.
 * Do not force-push, reset, clean, or stash someone else's uncommitted work.
@@ -71,6 +84,10 @@ Local development and validation are always safe and never deploy:
 | `npm run dev`, `npm run dev:analytics` | Local Wrangler dev servers on loopback. |
 | `node scripts/verify-production.mjs --service all` | Read-only production verification. No writes. |
 | `node scripts/verify-drift.mjs` | Read-only drift check: are both Workers on one committed revision? |
+| `node scripts/backup/d1-export.mjs --out <dir>` | Export both databases and write manifests. Read-only against production. |
+| `node scripts/backup/restore-verify.mjs --manifest <m>` | Restore a backup into an isolated local database and verify it. |
+| `node scripts/backup/backup-status.mjs` | Read-only backup freshness report; fails when a backup is stale. |
+| `node scripts/backup/r2-mirror.mjs --plan` | Plan the append-only file mirror (add `--apply` to copy). Never deletes. |
 | `npm run deploy` | **Refuses.** Prints this policy. Releases come from GitHub Actions. |
 
 ## Working agreement

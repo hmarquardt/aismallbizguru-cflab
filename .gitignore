@@ -12,3 +12,10 @@ test/remote/fixtures.local.json
 test/remote/collections.local.json
 
 .migration/
+
+# Backup artifacts and isolated restore targets. These contain production data and
+# must never be committed; the scheduled workflow keeps them in the runner only.
+backups/
+restore-drill/
+recovery/
+drill/

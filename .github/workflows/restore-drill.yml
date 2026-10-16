@@ -1,0 +1,120 @@
+name: restore drill
+
+# Manual, authorized drill. It downloads a stored backup, creates a NEW temporary
+# D1 database, restores the backup into it, verifies schema, row counts, integrity,
+# and foreign keys, and prints the teardown command. It never restores into a
+# production database (the script refuses production names and ids), never touches
+# production data, and has no schedule: creating temporary databases is a billable
+# resource action, so a human dispatches it deliberately.
+#
+# See docs/BACKUP-RESTORE.md for the drill procedure and the approval it needs.
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type RESTORE-DRILL to create temporary D1 databases and restore a backup into them'
+        required: true
+        default: 'no'
+      database:
+        description: 'Which backup to drill: cflab, cflab-analytics, or both'
+        required: true
+        default: 'both'
+      stamp:
+        description: 'Optional backup stamp (YYYYMMDDTHHMMSSZ); empty means the newest'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: restore-drill
+  cancel-in-progress: false
+
+env:
+  CLOUDFLARE_ACCOUNT_ID: b1aa310aa0a1638d72b8b086a21e557c
+
+jobs:
+  drill:
+    name: restore drill
+    if: inputs.confirm == 'RESTORE-DRILL'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+
+      - name: Download the selected stored backups
+        env:
+          CFLAB_BACKUP_BUCKET: ${{ vars.CFLAB_BACKUP_BUCKET }}
+          R2_ACCESS_KEY_ID: ${{ secrets.CFLAB_BACKUP_R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.CFLAB_BACKUP_R2_SECRET_ACCESS_KEY }}
+        run: |
+          set -euo pipefail
+          mkdir -p drill
+          for database in cflab cflab-analytics; do
+            if [ "${{ inputs.database }}" != 'both' ] && [ "${{ inputs.database }}" != "$database" ]; then continue; fi
+            if [ -n "${{ inputs.stamp }}" ]; then
+              node scripts/backup/download-backup.mjs --database "$database" --out drill --stamp "${{ inputs.stamp }}"
+            else
+              node scripts/backup/download-backup.mjs --database "$database" --out drill
+            fi
+          done
+
+      # Each manifest becomes its own temporary database; nothing existing is touched.
+      - name: Create temporary databases and restore into them
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CFLAB_RESTORE_D1_TOKEN }}
+        run: |
+          set -euo pipefail
+          stamp=$(date -u +%Y%m%dT%H%M%SZ)
+          for manifest in drill/*.manifest.json; do
+            database=$(node -e "console.log(require('./'+process.argv[1]).database)" "$manifest")
+            temp="cflab-restore-${database}-${stamp}"
+            npx wrangler d1 create "$temp" --config wrangler.jsonc > "drill/${database}-create.log" 2>&1 || { cat "drill/${database}-create.log"; exit 1; }
+            id=$(grep -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' "drill/${database}-create.log" | head -1)
+            [ -n "$id" ] || { echo "could not read the new database id from drill/${database}-create.log"; exit 1; }
+            node -e "
+              const fs = require('fs');
+              fs.writeFileSync('drill/${database}.config.json', JSON.stringify({
+                name: 'cflab-restore-drill',
+                main: 'src/index.ts',
+                compatibility_date: '2026-09-18',
+                account_id: process.env.CLOUDFLARE_ACCOUNT_ID,
+                d1_databases: [{ binding: 'DB', database_name: '${temp}', database_id: '${id}', migrations_dir: 'migrations' }],
+              }, null, 2) + '\n');
+            "
+            node scripts/backup/restore-verify.mjs \
+              --manifest "$manifest" \
+              --remote-database "$temp" \
+              --remote-config "drill/${database}.config.json" \
+              --allow-remote-write \
+              --report "drill/restore-${database}.json"
+            echo "npx wrangler d1 delete ${temp} --config wrangler.jsonc --skip-confirmation" >> drill/teardown.txt
+          done
+
+      - name: Record the drill
+        if: always()
+        run: |
+          {
+            echo '## CFLab restore drill'
+            echo
+            for report in drill/restore-*.json; do
+              [ -e "$report" ] || continue
+              node -e "const r=require('./'+process.argv[1]);console.log('- '+r.database+': restored into '+r.target+' ('+r.mode+'), '+r.tables.length+' tables, '+Object.values(r.rowCounts).reduce((s,n)=>s+n,0)+' rows, quick_check='+r.quickCheck+', foreign_key_violations='+r.foreignKeyViolations+', restore '+r.restore_ms+' ms, verification '+r.verify_ms+' ms')" "$report" >> "$GITHUB_STEP_SUMMARY"
+            done
+            echo
+            if [ -e drill/teardown.txt ]; then
+              echo 'Teardown (operator action, temporary databases only):'
+              echo '```'
+              cat drill/teardown.txt
+              echo '```'
+            else
+              echo 'No temporary database was created.'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

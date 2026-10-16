@@ -113,14 +113,25 @@ export async function verifyMirror({ source, destination, manifest, sample = 0, 
 
 // The source is read-only and defaults to the production file bucket: the client
 // is created with readOnly so a write to production is impossible, not just unused.
+//
+// Production reads use their OWN credentials (R2_SOURCE_ACCESS_KEY_ID /
+// R2_SOURCE_SECRET_ACCESS_KEY), because an R2 API token carries a single
+// permission level: one token scoped "Object Read" on cflab-files and a different
+// token scoped "Object Read & Write" on the backup bucket. There is deliberately
+// no fallback to the write-capable pair.
 export function sourceClientFromEnvironment(env = process.env, { fetchImpl } = {}) {
   const bucket = env.CFLAB_FILES_BUCKET ?? 'cflab-files';
   const accountId = env.CLOUDFLARE_ACCOUNT_ID ?? env.R2_ACCOUNT_ID;
-  const accessKeyId = env.R2_ACCESS_KEY_ID;
-  const secretAccessKey = env.R2_SECRET_ACCESS_KEY;
-  const missing = Object.entries({ CLOUDFLARE_ACCOUNT_ID: accountId, R2_ACCESS_KEY_ID: accessKeyId, R2_SECRET_ACCESS_KEY: secretAccessKey })
-    .filter(([, value]) => !value).map(([name]) => name);
-  if (missing.length) throw new Error(`missing R2 read configuration: ${missing.join(', ')} (see docs/BACKUP-RESTORE.md)`);
+  const accessKeyId = env.R2_SOURCE_ACCESS_KEY_ID;
+  const secretAccessKey = env.R2_SOURCE_SECRET_ACCESS_KEY;
+  const missing = Object.entries({
+    CLOUDFLARE_ACCOUNT_ID: accountId,
+    R2_SOURCE_ACCESS_KEY_ID: accessKeyId,
+    R2_SOURCE_SECRET_ACCESS_KEY: secretAccessKey,
+  }).filter(([, value]) => !value).map(([name]) => name);
+  if (missing.length) {
+    throw new Error(`missing production read configuration: ${missing.join(', ')} (separate from the backup credentials; see docs/BACKUP-RESTORE.md)`);
+  }
   return createR2Client({ accountId, bucket, accessKeyId, secretAccessKey, fetchImpl, readOnly: true });
 }
 

@@ -201,44 +201,63 @@ Leave public access **disabled**; do not create a custom domain or r2.dev URL.
 | GitHub secret / variable | Kind | Permissions | Used by |
 | --- | --- | --- | --- |
 | `CFLAB_BACKUP_D1_TOKEN` | Cloudflare API token | **D1: Read** on the account (no write) | `backup.yml` export step |
-| `CFLAB_BACKUP_R2_ACCESS_KEY_ID` / `CFLAB_BACKUP_R2_SECRET_ACCESS_KEY` | R2 S3 credentials | Object Read & Write on `cflab-backups`, **Object Read** on `cflab-files` | upload, status, mirror |
+| `CFLAB_BACKUP_SOURCE_R2_ACCESS_KEY_ID` / `CFLAB_BACKUP_SOURCE_R2_SECRET_ACCESS_KEY` | R2 API token (**Object Read**) scoped to `cflab-files` only | read production objects | mirror source |
+| `CFLAB_BACKUP_R2_ACCESS_KEY_ID` / `CFLAB_BACKUP_R2_SECRET_ACCESS_KEY` | R2 API token (**Object Read & Write**) scoped to `cflab-backups` only | upload, status, mirror destination, restore reads | `backup.yml`, restore |
 | `CFLAB_RESTORE_D1_TOKEN` | Cloudflare API token | **D1: Edit** (needed only to create the temporary drill database) | `restore-drill.yml`, manual restores |
 | `CFLAB_BACKUP_BUCKET` | repository variable | `cflab-backups` | workflow configuration |
 | `CFLAB_BACKUPS_ENABLED` | repository variable | `false` until activated | gates every backup job |
 
-The R2 credentials are the only ones that can touch stored backups. Cloudflare's
-R2 permissions cannot express "write but never delete", so deletion is prevented
-by the bucket lock rules, by the absence of any delete call in the tooling, and by
-keeping these credentials out of every other workflow. The production deploy token
-(`CLOUDFLARE_API_TOKEN`) is deliberately **not** used for backups, and the backup
-credentials are not used for releases.
+An R2 API token carries a **single** permission level, so production reads and
+backup writes cannot share one credential: `cflab-files` gets a read-only token
+and `cflab-backups` gets a read/write token. `verify-setup.mjs` fails when the two
+pairs are identical, and the mirror refuses to fall back to the write-capable pair
+for production. Cloudflare's R2 permissions cannot express "write but never
+delete", so deletion is prevented by the bucket lock rules, by the absence of any
+delete call in the tooling, and by keeping these credentials out of every other
+workflow. The production deploy token (`CLOUDFLARE_API_TOKEN`) is deliberately
+**not** used for backups, and the backup credentials are not used for releases.
+
+Create them in the dashboard (token creation is not available to the OAuth
+credential this repository's tooling uses):
+
+1. **My Profile → API Tokens → Create Token → Custom token**
+   * `D1: Read`, Account resources: the `b1aa310aa0a1638d72b8b086a21e557c` account → save as `CFLAB_BACKUP_D1_TOKEN`.
+   * (separately) `D1: Edit` → save as `CFLAB_RESTORE_D1_TOKEN`.
+2. **R2 → Manage R2 API Tokens → Create API Token**
+   * Permissions **Object Read**, *Specify bucket* `cflab-files` → save the Access Key ID and Secret Access Key as the SOURCE pair.
+   * Permissions **Object Read & Write**, *Specify bucket* `cflab-backups` → save as the backup pair.
 
 ### 5.3 Activate
 
-0. Confirm the setup in one command, which fails closed on anything missing:
-   `node scripts/backup/verify-setup.mjs` (add `--probe-write` to also prove that
-   the credentials can write to the backup bucket; it writes one small object under
-   `_verify/` and never overwrites). It checks the bucket, the lock and lifecycle
-   rules, public access, production read, and backup read/write.
-1. Create the bucket, lock rules, and lifecycle rules (§5.1).
-2. Create the two API tokens and the R2 S3 credentials (§5.2), add them as
-   secrets, and set the `CFLAB_BACKUP_BUCKET` variable.
-3. Run the `production backups` workflow once by hand
-   (Actions → production backups → Run workflow) and confirm all four steps pass
-   and that the freshness report is green.
-4. Only then set `CFLAB_BACKUPS_ENABLED=true` so the daily schedule starts.
-5. Run the drill in **prepare** mode first (`restore drill` → `mode=prepare`): it
-   downloads and verifies the newest stored backup and restores it locally, and
-   prints exactly what an execute run would create — without creating anything.
-   Then run `mode=execute` with `confirm=RESTORE-DRILL`, verify the result, and
-   tear the temporary databases down with the command the run prints. Repeat
-   quarterly.
+Everything below is required once; nothing runs until it is done.
 
-Production access is read-only by construction, not by convention: the mirror's
-source client is created with `readOnly: true`, so `putObject` throws before any
-request is signed (`test/backup/verify-setup.test.mjs` asserts this). The S3
-credentials should still be scoped to read-only on `cflab-files`; the code
-guarantee is the second layer.
+1. **Create the four credentials** in the Cloudflare dashboard (§5.2).
+2. **Add them to GitHub** (Settings → Secrets and variables → Actions):
+   * Secrets: `CFLAB_BACKUP_D1_TOKEN`, `CFLAB_BACKUP_SOURCE_R2_ACCESS_KEY_ID`,
+     `CFLAB_BACKUP_SOURCE_R2_SECRET_ACCESS_KEY`, `CFLAB_BACKUP_R2_ACCESS_KEY_ID`,
+     `CFLAB_BACKUP_R2_SECRET_ACCESS_KEY`, `CFLAB_RESTORE_D1_TOKEN`.
+   * Variables: `CFLAB_BACKUP_BUCKET=cflab-backups`, `CFLAB_BACKUPS_ENABLED=false`.
+3. **Verify:** `node scripts/backup/verify-setup.mjs --probe-write` — it must print
+   `PASS`. It checks the bucket, the lock and lifecycle rules, public access,
+   production read (with its own read-only credentials), backup read/write, and
+   that the two credential pairs are different.
+4. **First backup.** Either run the `production backups` workflow by hand, or run
+   the same steps locally in one line (no GitHub needed) with the values exported
+   in your shell:
+
+   ```sh
+   node scripts/backup/d1-export.mjs --out backups \
+     && for m in backups/*.manifest.json; do node scripts/backup/restore-verify.mjs --manifest "$m" --work-dir backups/restore; done \
+     && node scripts/backup/upload-backups.mjs --dir backups \
+     && node scripts/backup/backup-status.mjs --max-age-hours 30
+   ```
+
+5. **Enable the schedule** by setting `CFLAB_BACKUPS_ENABLED=true` once step 4 is
+   green, so the daily 03:37 UTC run starts.
+6. **Drill.** Run `restore drill` with `mode=prepare` first (downloads, verifies,
+   and restores the newest backup locally, creating nothing), then `mode=execute`
+   with `confirm=RESTORE-DRILL`, verify the result, and tear the temporary
+   databases down with the command the run prints. Repeat quarterly.
 
 ## 6. Recovery procedures
 
@@ -412,6 +431,23 @@ configuration instead of appending (use `set` with the complete rule list — th
 first attempt lost one rule from each list and the API read-back caught it), and
 `lock list` / `lifecycle list` print key/value blocks rather than JSON, so
 `verify-setup.mjs` parses that output and a test pins the real format.
+
+### Automation boundaries (established 2026-10-16, with evidence)
+
+| Action | Can it be automated? | Evidence |
+| --- | --- | --- |
+| Create the backup bucket, lock rules, lifecycle rules | **Yes — done** | `wrangler r2 bucket create` + `lock set` / `lifecycle set` with the operator's OAuth login |
+| Read the bucket configuration | **Yes** | `r2 bucket info` / `lock list` / `lifecycle list` / `dev-url get` / `domain list`, and the REST API |
+| Create Cloudflare API tokens (D1 read, D1 edit) and R2 API tokens | **No** — needs the dashboard | `GET /accounts/{id}/tokens` → `HTTP 403`, code `9109 Unauthorized to access requested resource`; the OAuth grant has no token-management scope (`wrangler whoami` scopes) |
+| Set GitHub secrets | **No** — needs the dashboard | no `GH_TOKEN`/`GITHUB_TOKEN`, no `gh` config, no credential helper: the only GitHub access is SSH for `git push`, which cannot write secrets (and sealing a secret needs libsodium, which is not a dependency) |
+| Set GitHub repository variables, dispatch a workflow | **No** — same reason | as above |
+| Run the import/export/upload/status pipeline itself | **Yes**, once credentials exist in the environment | the four commands in §5.3 step 4 |
+
+So the minimum operator action is exactly: create four credentials in the
+Cloudflare dashboard (§5.2) and paste six secrets plus two variables into the
+GitHub repository settings (§5.3 steps 1–2). Everything else — verification, the
+first backup, freshness reporting, the mirror, and the drill — is already
+implemented and can be run without touching a dashboard.
 
 ### Blockers to activation, in order
 

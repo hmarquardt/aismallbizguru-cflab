@@ -161,8 +161,24 @@ test('the production client refuses to write at all', async () => {
   await assert.rejects(client.putObject('apps/x/photo.jpg', 'data'), /read-only \(production access must never write\)/);
 });
 
-test('the mirror source client is created read-only from the environment', () => {
-  const client = sourceClientFromEnvironment({ CLOUDFLARE_ACCOUNT_ID: 'acct', R2_ACCESS_KEY_ID: 'AK', R2_SECRET_ACCESS_KEY: 'SK' });
+test('the mirror source client requires its own read-only credentials', () => {
+  const client = sourceClientFromEnvironment({
+    CLOUDFLARE_ACCOUNT_ID: 'acct', R2_SOURCE_ACCESS_KEY_ID: 'SRC', R2_SOURCE_SECRET_ACCESS_KEY: 'SRCSECRET',
+  });
   assert.equal(client.bucket, 'cflab-files');
-  assert.throws(() => sourceClientFromEnvironment({}), /missing R2 read configuration/);
+  assert.throws(() => sourceClientFromEnvironment({}), /missing production read configuration/);
+  // The write-capable pair must never stand in for the production read pair.
+  assert.throws(
+    () => sourceClientFromEnvironment({ CLOUDFLARE_ACCOUNT_ID: 'acct', R2_ACCESS_KEY_ID: 'AK', R2_SECRET_ACCESS_KEY: 'SK' }),
+    /missing production read configuration/,
+  );
+});
+
+test('sharing one credential pair between production and backups is flagged', () => {
+  const shared = evaluateSetup({ ...compliant(), credentials: { productionRead: 'ok', backupRead: 'ok', separateCredentials: false }, probeWrite: 'ok' });
+  assert.equal(shared.ok, false);
+  assert.match(shared.problems.join(' '), /same pair/);
+  const separate = evaluateSetup({ ...compliant(), credentials: { productionRead: 'ok', backupRead: 'ok', separateCredentials: true }, probeWrite: 'ok' });
+  assert.equal(separate.ok, true, separate.problems.join('; '));
+  assert.match(separate.notes.join(' '), /separate pairs/);
 });

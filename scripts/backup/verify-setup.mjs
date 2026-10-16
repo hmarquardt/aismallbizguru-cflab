@@ -95,6 +95,13 @@ export function evaluateSetup({ bucketExists, bucketInfo, lockRules = [], lifecy
   else notes.push('production read: ok (read-only client)');
   if (credentials.backupRead !== 'ok') problems.push(`reading the backup bucket failed: ${credentials.backupRead ?? 'not checked'}`);
   else notes.push('backup read: ok');
+  // An R2 API token carries one permission level, so sharing one pair between the
+  // two buckets would mean production reads use write-capable credentials.
+  if (credentials.separateCredentials === false) {
+    problems.push('the production read credentials and the backup write credentials are the same pair; production reads must use a read-only token of their own');
+  } else if (credentials.separateCredentials === true) {
+    notes.push('production and backup credentials are separate pairs');
+  }
   if (probeWrite === undefined) notes.push('backup write: not probed (pass --probe-write to verify it)');
   else if (probeWrite !== 'ok') problems.push(`writing to the backup bucket failed: ${probeWrite}`);
   else notes.push('backup write: ok (probe object under _verify/, never overwriting)');
@@ -209,6 +216,8 @@ async function main() {
     const backup = r2FromEnvironment();
     await backup.listObjects({ maxKeys: 1 });
     credentials.backupRead = 'ok';
+    credentials.separateCredentials = Boolean(process.env.R2_SOURCE_ACCESS_KEY_ID && process.env.R2_ACCESS_KEY_ID
+      && process.env.R2_SOURCE_ACCESS_KEY_ID !== process.env.R2_ACCESS_KEY_ID);
     if (args.includes('--probe-write')) {
       try {
         await backup.putObject(`_verify/probe-${Date.now()}.txt`, 'backup write probe\n', { contentType: 'text/plain' });

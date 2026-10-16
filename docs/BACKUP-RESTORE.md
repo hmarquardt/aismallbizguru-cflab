@@ -133,18 +133,32 @@ Two properties matter here:
 `.github/workflows/backup.yml` runs daily at 03:37 UTC and on demand, and each job
 is gated by the repository variable `CFLAB_BACKUPS_ENABLED == 'true'`:
 
-1. `d1-export.mjs` — read-only introspection, then `wrangler d1 export` for both
-   databases, structural verification, SHA-256, manifest, and a checksum file.
-2. `restore-verify.mjs` — restores each export into an isolated local D1, then
-   compares tables, row counts, `PRAGMA quick_check`, and `PRAGMA foreign_key_check`
-   with the manifest. **An export that does not restore is never uploaded.**
+1. `d1-export.mjs` — read-only introspection, then a **read-only logical dump** of
+   both databases: the schema from `sqlite_schema` and every row of every table
+   through `SELECT`, so the backup credential only ever needs **D1 Read**.
+   `wrangler d1 export` is deliberately *not* the default: CI proved the export API
+   requires **D1 Write** (the read-only token gets `Authentication error [code
+   10000]`), and widening the backup credential to write access to production data
+   would defeat the point. `--method export` still uses it for an operator who
+   holds a write-capable token. Either way: structural verification, SHA-256,
+   manifest, and a checksum file.
+2. `restore-verify.mjs` — restores each dump into an isolated local D1, then
+   compares tables, row counts, `PRAGMA quick_check`, `PRAGMA foreign_key_check`,
+   and **a canonical per-table row hash recorded in the manifest**. That last check
+   proves the restore reproduces the backed-up data exactly, ordering aside.
+   **An export that does not restore is never uploaded.**
 3. `upload-backups.mjs` — uploads the verified artifacts with date-stamped keys.
    The client refuses to overwrite an existing object and refuses to write into
    `cflab-files` or the legacy LabBox backup bucket.
 4. `backup-status.mjs` — fails the run when either database has no backup younger
    than 30 hours.
-5. The `files` job mirrors production objects with `r2-mirror.mjs --apply` and
-   verifies a 25-object sample.
+5. The `files` job mirrors production objects with `r2-mirror.mjs --apply
+   --limit 2000 --concurrency 8` and verifies a 25-object sample. Eight objects are
+   copied at a time (sequential copying of 1,329 objects took ~37 minutes;
+   concurrency brings the same work under 4). Reads retry transient 5xx/429/network
+   failures; writes never retry, so a failed write fails the run and the next run
+   resumes. **Run only one mirror at a time** — a second concurrent run is refused
+   as an overwrite rather than silently racing.
 
 The workflow never deploys, never migrates, and never writes to production: the
 D1 job only reads, and the mirror only reads `cflab-files`.
@@ -196,16 +210,27 @@ Verify with the authoritative configuration rather than the CLI rendering:
 
 Leave public access **disabled**; do not create a custom domain or r2.dev URL.
 
-### 5.2 Create the credentials (three, with separate authority)
+### 5.2 Credentials (provisioned 2026-10-16, four with separate authority)
 
 | GitHub secret / variable | Kind | Permissions | Used by |
 | --- | --- | --- | --- |
-| `CFLAB_BACKUP_D1_TOKEN` | Cloudflare API token | **D1: Read** on the account (no write) | `backup.yml` export step |
-| `CFLAB_BACKUP_SOURCE_R2_ACCESS_KEY_ID` / `CFLAB_BACKUP_SOURCE_R2_SECRET_ACCESS_KEY` | R2 API token (**Object Read**) scoped to `cflab-files` only | read production objects | mirror source |
-| `CFLAB_BACKUP_R2_ACCESS_KEY_ID` / `CFLAB_BACKUP_R2_SECRET_ACCESS_KEY` | R2 API token (**Object Read & Write**) scoped to `cflab-backups` only | upload, status, mirror destination, restore reads | `backup.yml`, restore |
-| `CFLAB_RESTORE_D1_TOKEN` | Cloudflare API token | **D1: Edit** (needed only to create the temporary drill database) | `restore-drill.yml`, manual restores |
+| `CFLAB_BACKUP_D1_TOKEN` | Cloudflare API token `cflab-backup-d1-read` | **D1: Read** on the account (no write) | `backup.yml` dump step |
+| `CFLAB_BACKUP_SOURCE_R2_ACCESS_KEY_ID` / `…_SECRET_ACCESS_KEY` | R2 API token `cflab-backup-r2-source-read` | **Object Read**, scoped to `cflab-files` only | production reads in the mirror |
+| `CFLAB_BACKUP_R2_ACCESS_KEY_ID` / `…_SECRET_ACCESS_KEY` | R2 API token `cflab-backup-r2-destination` | **Object Read & Write**, scoped to `cflab-backups` only | upload, status, mirror destination, restore reads |
+| `CFLAB_RESTORE_D1_TOKEN` | Cloudflare API token `cflab-restore-d1-write` | **D1: Write** (the dashboard's "D1: Edit"; needed only to create the temporary drill database) | `restore-drill.yml`, manual restores |
 | `CFLAB_BACKUP_BUCKET` | repository variable | `cflab-backups` | workflow configuration |
-| `CFLAB_BACKUPS_ENABLED` | repository variable | `false` until activated | gates every backup job |
+| `CFLAB_BACKUPS_ENABLED` | repository variable | `true` since 2026-10-16 | gates every backup job |
+
+The four credentials were created through the Cloudflare API (`POST
+/accounts/{account}/tokens`) with account token management, using permission groups
+`D1 Read` (`192192df…`), `D1 Write` (`09b2857d…`), and the bucket-scoped `Workers R2
+Storage Bucket Item Read`/`Write` (`6a018a9f…`, `2efd5506…`). Bucket scoping uses
+the documented resource form
+`com.cloudflare.edge.r2.bucket.<account_id>_default_<bucket_name>` — note the order:
+`<account>_default_<bucket>`, not `<account>_<bucket>_default`. For an R2 API token
+the S3 **Access Key ID is the token id** and the S3 **Secret Access Key is the
+SHA-256 hash of the token value**, not the value itself (a raw value fails every
+request with `SignatureDoesNotMatch`).
 
 An R2 API token carries a **single** permission level, so production reads and
 backup writes cannot share one credential: `cflab-files` gets a read-only token
@@ -227,16 +252,67 @@ credential this repository's tooling uses):
    * Permissions **Object Read**, *Specify bucket* `cflab-files` → save the Access Key ID and Secret Access Key as the SOURCE pair.
    * Permissions **Object Read & Write**, *Specify bucket* `cflab-backups` → save as the backup pair.
 
-### 5.3 Activate
+Both routes work; the API route above is what was actually used. Local runs can
+source `~/.config/cflab/provisioned/env.sh` (mode 0600), which exports
+`CLOUDFLARE_ACCOUNT_ID`, `CFLAB_BACKUP_BUCKET`, `CFLAB_FILES_BUCKET`, and the two R2
+credential pairs derived from the token JSON in the same directory.
 
-Everything below is required once; nothing runs until it is done.
+### 5.3 Activation record (2026-10-16)
 
-1. **Create the four credentials** in the Cloudflare dashboard (§5.2).
+Done, in this order:
+
+1. **Four credentials created** through the API (§5.2) — D1 Read, D1 Write, R2
+   Object Read on `cflab-files`, R2 Object Read & Write on `cflab-backups`.
+   Scope was verified, not assumed: each R2 pair lists its own bucket and is
+   **denied (HTTP 403)** on the other.
+2. **Six secrets and two variables** stored in GitHub via `gh secret set` (values
+   piped from files, never on a command line or in a log). `CFLAB_BACKUPS_ENABLED`
+   started `false`.
+3. **`verify-setup.mjs --probe-write` → `PASS`**: bucket present and private, both
+   30-day locks, both lifecycle rules (90/400 days), production read, backup read,
+   separate credential pairs, and the controlled write probe.
+4. **First full backup and mirror**: both databases dumped, restored, and verified
+   by row hash, then uploaded; all 1,329 production objects (254.9 MB) mirrored and
+   re-hashed end to end. `backup-status.mjs --max-age-hours 30` reports both
+   databases fresh.
+5. **`CFLAB_BACKUPS_ENABLED=true`**, then the `production backups` workflow was
+   dispatched and completed **green** (run
+   [38928586452](https://github.com/hmarquardt/aismallbizguru-cflab/actions/runs/38928586452)),
+   which is the proof that the scheduled configuration works with these secrets.
+   The workflow is `active` and keeps its 03:37 UTC schedule.
+6. **Restore drill: not run** — the remote drill is deliberately left for the
+   operator (§6/§7), and production was never restored, no archive was deleted.
+
+Two defects were found by running this against production and fixed: the D1 backup
+credential had to stop depending on the write-only export API (§4 step 1), and
+`writeJsonFile` did not create its parent directory, which broke the mirror step's
+`--report` in CI.
+
+**Residual operator action.** The temporary account-token-management credential used
+for provisioning (a *user* token, id `ab307d5957761af58d64bdd5eecc4f8a`) **could not
+be revoked through the API**: `DELETE /user/tokens/{id}` returned HTTP 403
+(`code 9109`), because its grant covers account-token creation, not user-token
+deletion. Its local copy (`~/.config/cflab/token-bootstrap`) has been removed with
+`rm -P`, so the value is no longer on disk, but the token is still active and must
+be deleted by hand: **Cloudflare dashboard → My Profile → API Tokens → find the
+temporary token → Delete**. Until that is done, one credential with account token
+management exists.
+
+
+
+### 5.4 Re-provisioning from scratch (if the credentials are ever lost)
+
+Everything below is required once; nothing runs until it is done. On a fresh
+account, follow §5.1 first.
+
+1. **Create the four credentials** (§5.2).
 2. **Add them to GitHub** (Settings → Secrets and variables → Actions):
    * Secrets: `CFLAB_BACKUP_D1_TOKEN`, `CFLAB_BACKUP_SOURCE_R2_ACCESS_KEY_ID`,
      `CFLAB_BACKUP_SOURCE_R2_SECRET_ACCESS_KEY`, `CFLAB_BACKUP_R2_ACCESS_KEY_ID`,
      `CFLAB_BACKUP_R2_SECRET_ACCESS_KEY`, `CFLAB_RESTORE_D1_TOKEN`.
-   * Variables: `CFLAB_BACKUP_BUCKET=cflab-backups`, `CFLAB_BACKUPS_ENABLED=false`.
+   * Variables: `CFLAB_BACKUP_BUCKET=cflab-backups`, `CFLAB_BACKUPS_ENABLED=false`
+     (set it to `true` again once step 4 is green — leaving it `false` while the
+     credentials are wrong keeps a failing schedule quiet).
 3. **Verify:** `node scripts/backup/verify-setup.mjs --probe-write` — it must print
    `PASS`. It checks the bucket, the lock and lifecycle rules, public access,
    production read (with its own read-only credentials), backup read/write, and

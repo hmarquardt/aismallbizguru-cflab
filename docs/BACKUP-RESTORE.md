@@ -155,21 +155,46 @@ None of this is applied yet: it is the exact setup the operator runs once before
 setting `CFLAB_BACKUPS_ENABLED=true`. Nothing here is a secret in the repository —
 all values live in GitHub secrets and repository variables.
 
-### 5.1 Create the backup bucket (operator, dashboard or wrangler)
+### 5.1 Create the backup bucket (done 2026-10-16; reproducible with these commands)
 
 ```sh
 npx wrangler r2 bucket create cflab-backups
+
+# Lock rules and lifecycle rules are applied with `set`, not `add`:
+# `wrangler r2 bucket lock|lifecycle add` REPLACES the whole configuration in
+# wrangler 4.135, so adding a second rule silently drops the first.
+npx wrangler r2 bucket lock set cflab-backups --file lock.json
+npx wrangler r2 bucket lifecycle set cflab-backups --file lifecycle.json
 ```
 
-Then, in the bucket's **Settings**:
+`lock.json` (30-day protection for both backup prefixes):
 
-* **Bucket lock rules** — `protect-d1-backups` (prefix `d1/`, retain 30 days) and
-  `protect-file-mirror` (prefix `files/`, retain 30 days). Lock rules take
-  precedence over lifecycle rules and cannot be shortened after the fact without
-  an explicit removal.
-* **Object lifecycle rules** — `expire-d1-backups` (prefix `d1/`, delete after 90
-  days) and `expire-file-mirror` (prefix `files/`, delete after 400 days).
-* Leave public access **disabled**; do not create a custom domain or r2.dev URL.
+```json
+{ "rules": [
+  { "id": "protect-d1-backups", "enabled": true, "prefix": "d1/", "condition": { "type": "Age", "maxAgeSeconds": 2592000 } },
+  { "id": "protect-file-mirror", "enabled": true, "prefix": "files/", "condition": { "type": "Age", "maxAgeSeconds": 2592000 } }
+] }
+```
+
+`lifecycle.json` (90-day D1 retention, 400-day mirror retention, plus the default
+multipart abort rule that `set` must preserve):
+
+```json
+{ "rules": [
+  { "id": "Default Multipart Abort Rule", "enabled": true, "conditions": {},
+    "abortMultipartUploadsTransition": { "condition": { "type": "Age", "maxAge": 604800 } } },
+  { "id": "expire-d1-backups", "enabled": true, "conditions": { "prefix": "d1/" },
+    "deleteObjectsTransition": { "condition": { "type": "Age", "maxAge": 7776000 } } },
+  { "id": "expire-file-mirror", "enabled": true, "conditions": { "prefix": "files/" },
+    "deleteObjectsTransition": { "condition": { "type": "Age", "maxAge": 34560000 } } }
+] }
+```
+
+Verify with the authoritative configuration rather than the CLI rendering:
+`curl -H "Authorization: Bearer $CF_API_TOKEN" …/r2/buckets/cflab-backups/lock`
+(and `…/lifecycle`), or `node scripts/backup/verify-setup.mjs`.
+
+Leave public access **disabled**; do not create a custom domain or r2.dev URL.
 
 ### 5.2 Create the credentials (three, with separate authority)
 
@@ -372,13 +397,21 @@ Implemented, committed, and tested:
 
 | Check | Result |
 | --- | --- |
-| Backup bucket `cflab-backups` | **does not exist** — the API returns `The specified bucket does not exist` (code 10006) for bucket info, lock, and lifecycle, and it is absent from the bucket list |
-| Bucket lock rules | cannot exist without the bucket (verified absent) |
-| Lifecycle rules | cannot exist without the bucket (verified absent) |
-| Public access | not applicable until the bucket exists |
-| GitHub backup credentials | not present in this environment; repository variables and secrets cannot be read or set without repository authorization, and `gh` is not authenticated here |
+| Backup bucket `cflab-backups` | **created 2026-10-16T14:32:25.025Z**, account `b1aa310aa0a1638d72b8b086a21e557c`, location `ENAM`, storage class Standard, **0 objects / 0 B** |
+| Bucket lock rules | `protect-d1-backups` (`d1/`, `Age` 2,592,000 s = 30 days) and `protect-file-mirror` (`files/`, 30 days), both enabled, read back from the API |
+| Lifecycle rules | `expire-d1-backups` (`d1/`, `maxAge` 7,776,000 s = 90 days), `expire-file-mirror` (`files/`, 34,560,000 s = 400 days), plus the preserved `Default Multipart Abort Rule` (7 days) |
+| Public access | **disabled**: r2.dev URL disabled, no custom domains |
+| `node scripts/backup/verify-setup.mjs` | every configuration check passes; the credential checks correctly report that no R2 credentials are present in this environment |
+| GitHub backup credentials | still to create: `CFLAB_BACKUP_D1_TOKEN`, the R2 S3 keys, `CFLAB_RESTORE_D1_TOKEN`, and the `CFLAB_BACKUP_BUCKET` / `CFLAB_BACKUPS_ENABLED` variables |
 | Production R2 (unchanged) | `cflab-files`: 1,329 objects, 267 MB; the `files` table records 1,325 rows / 266,972,411 bytes, so **4 objects are not represented in the table** — enumerating them needs S3 credentials, which do not exist yet |
 | Real D1 export + isolated restore (repeated) | `cflab` 11,269,440 bytes / sha256 `6b5a87aa…` / 12 tables / 2,746 rows; `cflab-analytics` 696,164 bytes / sha256 `3c287493…` / 16 tables / 1,268 rows; both restored with `quick_check=ok`, no foreign-key violations, restore 10.7 s and 5.0 s |
+
+Two operational lessons from provisioning, now encoded in the tooling and in §5.1:
+`wrangler r2 bucket lock add` / `lifecycle add` **replace** the whole
+configuration instead of appending (use `set` with the complete rule list — the
+first attempt lost one rule from each list and the API read-back caught it), and
+`lock list` / `lifecycle list` print key/value blocks rather than JSON, so
+`verify-setup.mjs` parses that output and a test pins the real format.
 
 ### Blockers to activation, in order
 

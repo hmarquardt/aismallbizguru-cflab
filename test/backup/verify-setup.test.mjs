@@ -1,8 +1,93 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { EXPECTED, evaluateSetup } from '../../scripts/backup/verify-setup.mjs';
+import {
+  EXPECTED, evaluateSetup, lifecycleRulesFromOutput, lockRulesFromOutput, parseRuleBlocks,
+} from '../../scripts/backup/verify-setup.mjs';
 import { createR2Client } from '../../scripts/backup/r2-client.mjs';
 import { sourceClientFromEnvironment } from '../../scripts/backup/r2-mirror.mjs';
+
+// Actual `wrangler r2 bucket lock|lifecycle list` output, captured 2026-10-16.
+const LOCK_OUTPUT = `
+Listing lock rules for bucket 'cflab-backups'...
+
+name:       protect-d1-backups
+enabled:    Yes
+prefix:     d1/
+condition:  after 30 days
+
+name:       protect-file-mirror
+enabled:    Yes
+prefix:     files/
+condition:  after 30 days
+`;
+
+const LIFECYCLE_OUTPUT = `
+Listing lifecycle rules for bucket 'cflab-backups'...
+
+name:     Default Multipart Abort Rule
+enabled:  Yes
+prefix:   (all prefixes)
+action:   Abort incomplete multipart uploads after 7 days
+
+name:     expire-d1-backups
+enabled:  Yes
+prefix:   d1/
+action:   Expire objects after 90 days
+
+name:     expire-file-mirror
+enabled:  Yes
+prefix:   files/
+action:   Expire objects after 400 days
+`;
+
+test('lock rule output is parsed into the documented shape', () => {
+  const rules = lockRulesFromOutput(LOCK_OUTPUT);
+  assert.equal(rules.length, 2);
+  assert.deepEqual(rules.map(rule => rule.prefix), ['d1/', 'files/']);
+  assert.equal(rules[0].condition.maxAgeSeconds, 30 * 86400);
+  assert.equal(rules[0].enabled, true);
+});
+
+test('lifecycle rule output is parsed and the default multipart rule is kept distinct', () => {
+  const rules = lifecycleRulesFromOutput(LIFECYCLE_OUTPUT);
+  assert.equal(rules.length, 3);
+  assert.deepEqual(rules.map(rule => rule.prefix), ['', 'd1/', 'files/']);
+  assert.equal(rules[1].deleteAfterDays, 90);
+  assert.equal(rules[2].deleteAfterDays, 400);
+  assert.equal(rules[0].deleteAfterDays, undefined);
+  assert.equal(parseRuleBlocks(LIFECYCLE_OUTPUT).length, 3);
+});
+
+test('the live bucket configuration satisfies the documented policy', () => {
+  const result = evaluateSetup({
+    bucketExists: true,
+    bucketInfo: { object_count: 0, bucket_size: '0 B' },
+    lockRules: lockRulesFromOutput(LOCK_OUTPUT),
+    lifecycleRules: lifecycleRulesFromOutput(LIFECYCLE_OUTPUT),
+    publicAccess: { devUrl: false, domains: [] },
+    credentials: { productionRead: 'ok', backupRead: 'ok' },
+    probeWrite: 'ok',
+  });
+  assert.equal(result.ok, true, result.problems.join('; '));
+  assert.match(result.notes.join(' '), /lock "d1\/": 30 days/);
+  assert.match(result.notes.join(' '), /lock "files\/": 30 days/);
+  assert.match(result.notes.join(' '), /lifecycle "d1\/": expire after 90 days/);
+  assert.match(result.notes.join(' '), /lifecycle "files\/": expire after 400 days/);
+});
+
+test('a weaker live configuration still fails the same policy', () => {
+  const weakened = evaluateSetup({
+    bucketExists: true,
+    lockRules: lockRulesFromOutput(LOCK_OUTPUT.replace('after 30 days', 'after 7 days')),
+    lifecycleRules: lifecycleRulesFromOutput(LIFECYCLE_OUTPUT.replace('after 90 days', 'after 900 days')),
+    publicAccess: { devUrl: false, domains: [] },
+    credentials: { productionRead: 'ok', backupRead: 'ok' },
+    probeWrite: 'ok',
+  });
+  assert.equal(weakened.ok, false);
+  assert.match(weakened.problems.join(' '), /below the documented 30/);
+  assert.match(weakened.problems.join(' '), /above the documented 90/);
+});
 
 // The documented policy from docs/BACKUP-RESTORE.md.
 function compliant(overrides = {}) {

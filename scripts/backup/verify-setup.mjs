@@ -102,6 +102,54 @@ export function evaluateSetup({ bucketExists, bucketInfo, lockRules = [], lifecy
   return { ok: problems.length === 0, problems, notes };
 }
 
+// `wrangler r2 bucket lock|lifecycle list` print key/value blocks rather than
+// JSON, so the rules are parsed from that output. Verified against the real
+// command output on 2026-10-16.
+export function parseRuleBlocks(output) {
+  return output
+    .split(/\n\s*\n/)
+    .map(block => {
+      const rule = {};
+      for (const line of block.split('\n')) {
+        const match = /^([A-Za-z_ ]+):\s*(.+)$/.exec(line.trim());
+        if (match) rule[match[1].trim().toLowerCase()] = match[2].trim();
+      }
+      return rule;
+    })
+    .filter(rule => typeof rule.name === 'string');
+}
+
+function prefixOf(value) {
+  const prefix = value ?? '';
+  return prefix === '(all prefixes)' ? '' : prefix;
+}
+
+export function lockRulesFromOutput(output) {
+  return parseRuleBlocks(output).map(rule => {
+    const condition = rule.condition ?? '';
+    const days = /after (\d+) days?/i.exec(condition);
+    return {
+      name: rule.name,
+      prefix: prefixOf(rule.prefix),
+      enabled: (rule.enabled ?? 'Yes').toLowerCase() === 'yes',
+      ...(days ? { condition: { type: 'Age', maxAgeSeconds: Number(days[1]) * 86400 } } : {}),
+      ...(/indefinite/i.test(condition) ? { condition: { type: 'Indefinite' } } : {}),
+    };
+  });
+}
+
+export function lifecycleRulesFromOutput(output) {
+  return parseRuleBlocks(output).map(rule => {
+    const days = /expire objects after (\d+) days?/i.exec(rule.action ?? '');
+    return {
+      name: rule.name,
+      prefix: prefixOf(rule.prefix),
+      enabled: (rule.enabled ?? 'Yes').toLowerCase() === 'yes',
+      ...(days ? { deleteAfterDays: Number(days[1]) } : {}),
+    };
+  });
+}
+
 function wranglerJson(args) {
   const result = spawnSync('node_modules/.bin/wrangler', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
   const output = `${result.stdout ?? ''}${result.stderr ?? ''}`;
@@ -129,19 +177,15 @@ async function main() {
   const lifecycleRules = [];
   let publicAccess = {};
   if (bucketExists) {
-    const locks = wranglerJson(['r2', 'bucket', 'lock', 'list', EXPECTED.bucket, '--json']);
-    if (locks.status === 0) {
-      try { lockRules.push(...(JSON.parse(locks.output).rules ?? JSON.parse(locks.output) ?? [])); } catch { /* reported below as missing */ }
-    }
-    const lifecycles = wranglerJson(['r2', 'bucket', 'lifecycle', 'list', EXPECTED.bucket, '--json']);
-    if (lifecycles.status === 0) {
-      try { lifecycleRules.push(...(JSON.parse(lifecycles.output).rules ?? JSON.parse(lifecycles.output) ?? [])); } catch { /* reported below as missing */ }
-    }
+    const locks = wranglerJson(['r2', 'bucket', 'lock', 'list', EXPECTED.bucket]);
+    if (locks.status === 0) lockRules.push(...lockRulesFromOutput(locks.output));
+    const lifecycles = wranglerJson(['r2', 'bucket', 'lifecycle', 'list', EXPECTED.bucket]);
+    if (lifecycles.status === 0) lifecycleRules.push(...lifecycleRulesFromOutput(lifecycles.output));
     const devUrl = wranglerJson(['r2', 'bucket', 'dev-url', 'get', EXPECTED.bucket]);
-    const domains = wranglerJson(['r2', 'bucket', 'domain', 'list', EXPECTED.bucket, '--json']);
+    const domains = wranglerJson(['r2', 'bucket', 'domain', 'list', EXPECTED.bucket]);
     publicAccess = {
       devUrl: /enabled:\s*true/i.test(devUrl.output),
-      domains: domains.status === 0 ? (() => { try { const parsed = JSON.parse(domains.output); return parsed.domains ?? parsed ?? []; } catch { return []; } })() : [],
+      domains: /no custom domains/i.test(domains.output) ? [] : (domains.output.match(/https?:\/\/[^\s]+/g) ?? []),
     };
   }
 

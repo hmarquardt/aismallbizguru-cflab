@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  buildDumpSql, canonicalRowHash, sqlLiteral,
+  buildDumpSql, canonicalRowHash, orderTablesByDependencies, sqlLiteral,
   backupKeys, buildManifest, compactStamp, inspectExportSql, validateManifest, verifyArtifactAgainstManifest, verifyExport,
 } from '../../scripts/backup/lib.mjs';
 import { assessFreshness } from '../../scripts/backup/backup-status.mjs';
@@ -183,6 +183,45 @@ test('a dump is a faithful, import-safe SQL file', () => {
   assert.match(sql, /INSERT INTO "files" \("id","filename"\) VALUES\('a','O''Brien\.jpg'\);/);
   assert.match(sql, /INSERT INTO "files" \("id","filename"\) VALUES\('b',NULL\);/);
   assert.doesNotMatch(sql, /BEGIN TRANSACTION|COMMIT/);
+});
+
+test('tables are ordered parents-before-children so a dump imports in auto-commit', () => {
+  const schema = [
+    { type: 'table', name: 'password_reset_tokens', sql: 'CREATE TABLE password_reset_tokens (id TEXT, user_id TEXT REFERENCES "users"(id))' },
+    { type: 'table', name: 'users', sql: 'CREATE TABLE users (id TEXT PRIMARY KEY)' },
+    { type: 'table', name: 'files', sql: 'CREATE TABLE files (id TEXT, record_id TEXT REFERENCES records(id))' },
+    { type: 'table', name: 'records', sql: 'CREATE TABLE records (id TEXT PRIMARY KEY)' },
+    { type: 'index', name: 'files_by_record', sql: 'CREATE INDEX files_by_record ON files(record_id)' },
+  ];
+  const { ordered, cycles } = orderTablesByDependencies(schema);
+  assert.deepEqual(cycles, [], 'no cycles in this schema');
+  assert.ok(ordered.indexOf('users') < ordered.indexOf('password_reset_tokens'), 'users precedes its dependent table');
+  assert.ok(ordered.indexOf('records') < ordered.indexOf('files'), 'records precedes its dependent table');
+
+  const sql = buildDumpSql({ schema, rowsByTable: { users: [{ id: 'u1' }], password_reset_tokens: [{ id: 'p1', user_id: 'u1' }] } });
+  assert.ok(sql.indexOf('CREATE TABLE users') < sql.indexOf("INSERT INTO \"users\""), 'a table is created before its rows');
+  assert.ok(sql.indexOf("INSERT INTO \"users\"") < sql.indexOf('CREATE TABLE password_reset_tokens'), 'the parent rows are inserted before the child table is created');
+  assert.ok(sql.indexOf('CREATE TABLE password_reset_tokens') < sql.indexOf('CREATE INDEX files_by_record'), 'indexes come after the data');
+});
+
+test('a self-reference or an unknown reference does not break ordering', () => {
+  const schema = [
+    { type: 'table', name: 'nodes', sql: 'CREATE TABLE nodes (id TEXT PRIMARY KEY, parent TEXT REFERENCES nodes(id))' },
+    { type: 'table', name: 'orphans', sql: 'CREATE TABLE orphans (id TEXT, other TEXT REFERENCES vanished(id))' },
+  ];
+  const { ordered, cycles } = orderTablesByDependencies(schema);
+  assert.deepEqual(cycles, []);
+  assert.deepEqual([...ordered].sort(), ['nodes', 'orphans']);
+});
+
+test('internal bookkeeping rows are dumped last', () => {
+  const sql = buildDumpSql({
+    schema: [{ type: 'table', name: 'records', sql: 'CREATE TABLE records (id INTEGER PRIMARY KEY AUTOINCREMENT)' }],
+    rowsByTable: { records: [{ id: 4 }] },
+    internalRowsByTable: { sqlite_sequence: [{ name: 'records', seq: 4 }] },
+  });
+  assert.ok(sql.indexOf("INSERT INTO \"records\"") < sql.indexOf('INSERT INTO "sqlite_sequence"'), 'the sequence counter is restored after the rows');
+  assert.match(sql, /INSERT INTO "sqlite_sequence" \("name","seq"\) VALUES\('records',4\);/);
 });
 
 test('row hashes are order-independent and detect any data change', () => {

@@ -20,7 +20,7 @@ import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
-  backupKeys, buildDumpSql, buildManifest, canonicalRowHash, compactStamp, sha256File, verifyExport,
+  backupKeys, buildDumpSql, buildManifest, canonicalRowHash, compactStamp, orderTablesByDependencies, sha256File, verifyExport,
   wranglerResultSets, wranglerRows, writeJsonFile,
 } from './lib.mjs';
 
@@ -70,22 +70,67 @@ const SCHEMA_SQL = "SELECT type, name, sql FROM sqlite_schema WHERE sql IS NOT N
 // only needs D1 Read. `wrangler d1 export` is not usable for that: the export API
 // requires D1 Write (it stages the SQL in Cloudflare's own R2 bucket), which would
 // mean giving the backup job write access to production data.
-export function dumpDatabase(database, { run = wrangler } = {}) {
+//
+// Consistency: every table is read inside ONE request. D1 executes the statements
+// of a single request in one transaction ("batched statements are SQL
+// transactions"), so the reads share a snapshot. Reading each table in its own
+// request does not: measured against a temporary database under concurrent
+// two-table commits, per-request reads tore 84% of the time and single-request
+// reads never did. If the single request fails (for example a database too large
+// for one response), the fallback is recorded in the manifest rather than hidden.
+export function dumpDatabase(database, { run = wrangler, allowSplitReads = true, log = console.log } = {}) {
   const schema = wranglerRows(run(['d1', 'execute', database.binding, '--remote', '--config', database.config, '--json', '--command', SCHEMA_SQL]).output)
     .map(row => ({ type: row.type, name: row.name, sql: String(row.sql) }));
-  const tables = schema.filter(item => item.type === 'table').map(item => item.name);
-  if (!tables.length) throw new Error(`${database.label}: the live database reported no tables; refusing to dump`);
+  const { ordered, cycles } = orderTablesByDependencies(schema);
+  if (!ordered.length) throw new Error(`${database.label}: the live database reported no tables; refusing to dump`);
 
-  const rowsByTable = {};
+  const readAll = strategy => {
+    const rowsByTable = {};
+    if (strategy === 'single-request') {
+      const sets = wranglerResultSets(run(['d1', 'execute', database.binding, '--remote', '--config', database.config, '--json', '--command', ordered.map(table => `SELECT * FROM "${table}"`).join('; ')]).output);
+      if (sets.length !== ordered.length) throw new Error(`${database.label}: expected ${ordered.length} result sets from one request, received ${sets.length}`);
+      ordered.forEach((table, index) => { rowsByTable[table] = sets[index]; });
+      return rowsByTable;
+    }
+    for (const table of ordered) {
+      rowsByTable[table] = wranglerRows(run(['d1', 'execute', database.binding, '--remote', '--config', database.config, '--json', '--command', `SELECT * FROM "${table}"`]).output);
+    }
+    return rowsByTable;
+  };
+
+  let consistency = 'single-request-snapshot';
+  let rowsByTable;
+  try {
+    rowsByTable = readAll('single-request');
+  } catch (error) {
+    if (!allowSplitReads) throw error;
+    log(`WARN  ${database.label}: one-request read failed (${error.message}); falling back to per-table reads, which are NOT a single snapshot`);
+    rowsByTable = readAll('per-table');
+    consistency = 'per-table-reads-not-a-snapshot';
+  }
+
+  // sqlite_sequence carries the AUTOINCREMENT counters. It is D1-managed
+  // bookkeeping rather than application data, so it is read separately and written
+  // last; a database without AUTOINCREMENT tables has no such table.
+  const internalRowsByTable = {};
+  const sequence = run(['d1', 'execute', database.binding, '--remote', '--config', database.config, '--json', '--command', 'SELECT * FROM sqlite_sequence'], { allowFailure: true });
+  if (sequence.status === 0) internalRowsByTable.sqlite_sequence = wranglerRows(sequence.output);
+
   const rowCounts = {};
   const rowHashes = {};
-  for (const table of tables) {
-    const rows = wranglerRows(run(['d1', 'execute', database.binding, '--remote', '--config', database.config, '--json', '--command', `SELECT * FROM "${table}"`]).output);
-    rowsByTable[table] = rows;
-    rowCounts[table] = rows.length;
-    rowHashes[table] = canonicalRowHash(rows);
+  for (const table of ordered) {
+    rowCounts[table] = rowsByTable[table].length;
+    rowHashes[table] = canonicalRowHash(rowsByTable[table]);
   }
-  return { schema, tables, rowsByTable, rowCounts, rowHashes, sql: buildDumpSql({ schema, rowsByTable }) };
+  return { schema, tables: ordered, rowsByTable, rowCounts, rowHashes, internalRowsByTable, cycles, consistency, sql: buildDumpSql({ schema, rowsByTable, internalRowsByTable }) };
+}
+
+// Best-effort Time Travel bookmark, recorded so an operator can see which point in
+// history a backup corresponds to. Never fatal: the CLI prints prose, not JSON.
+export function currentBookmark(database, { run = wrangler } = {}) {
+  const result = run(['d1', 'time-travel', 'info', database.binding, '--config', database.config], { allowFailure: true });
+  const match = result.output.match(/[0-9a-f]{8}-[0-9a-f]{8}-[0-9a-f]{8}-[0-9a-f]{40}/);
+  return match ? match[0] : undefined;
 }
 
 export async function exportDatabase(database, { outDir, stamp = compactStamp(), run = wrangler, gitRevision, capturedAt = new Date().toISOString(), method = 'dump' } = {}) {
@@ -101,13 +146,20 @@ export async function exportDatabase(database, { outDir, stamp = compactStamp(),
   let verification;
   let source;
   let rowHashes;
+  let consistency;
+  let bookmarkBefore;
+  let bookmarkAfter;
   if (method === 'dump') {
     // Default: read-only SELECT dump, so the backup credential needs D1 Read only.
+    bookmarkBefore = currentBookmark(database, { run });
     const dump = dumpDatabase(database, { run });
+    bookmarkAfter = currentBookmark(database, { run });
     sql = dump.sql;
     rowHashes = dump.rowHashes;
+    consistency = dump.consistency;
+    if (dump.cycles.length) throw new Error(`${database.label}: the schema has a foreign-key reference cycle (${dump.cycles.join(', ')}), so a dump cannot be ordered safely`);
     verification = verifyExport({ sql, expectedTables: tables, liveCounts: dump.rowCounts, minimumBytes: database.minimumBytes });
-    source = `read-only SELECT dump of ${database.binding}`;
+    source = `read-only SELECT dump of ${database.binding} (${dump.consistency})`;
   } else {
     // Alternative: the Cloudflare export API, which requires a write-capable token.
     const exported = run(['d1', 'export', database.binding, '--remote', '--config', database.config, '--output', sqlPath], { allowFailure: true });
@@ -147,6 +199,9 @@ export async function exportDatabase(database, { outDir, stamp = compactStamp(),
     gitRevision,
   });
   if (method === 'dump') manifest.method = 'read-only-select';
+  if (method === 'dump') manifest.consistency = consistency;
+  if (bookmarkBefore) manifest.bookmark_before = bookmarkBefore;
+  if (bookmarkAfter) manifest.bookmark_after = bookmarkAfter;
   if (rowHashes) manifest.row_hashes = rowHashes;
   if (Object.keys(verification.internalRowCounts).length) manifest.internal_row_counts = verification.internalRowCounts;
   const manifestPath = path.join(outDir, path.basename(keys.manifest));

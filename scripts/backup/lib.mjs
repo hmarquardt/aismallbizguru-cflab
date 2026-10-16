@@ -91,13 +91,64 @@ export function insertStatements(table, rows) {
   });
 }
 
-// Builds a D1-import-compatible dump from schema statements and queried rows.
-export function buildDumpSql({ schema, rowsByTable }) {
-  const order = { table: 0, index: 1, trigger: 2, view: 3 };
+// Tables must be inserted parent-before-child: D1's import runs statements in
+// auto-commit, so `PRAGMA defer_foreign_keys` cannot rescue an insert that runs
+// before the row it references. Reading the live schema and ordering by the
+// REFERENCES clauses is what makes a dump importable anywhere, not just locally.
+export function orderTablesByDependencies(schema) {
+  const tables = schema.filter(item => item.type === 'table').map(item => item.name);
+  const known = new Set(tables);
+  const parents = new Map(tables.map(table => [table, new Set()]));
+  for (const item of schema) {
+    if (item.type !== 'table') continue;
+    for (const match of String(item.sql).matchAll(/REFERENCES\s+["`]?([A-Za-z0-9_]+)["`]?/gi)) {
+      // Self-references do not constrain insert order.
+      if (known.has(match[1]) && match[1] !== item.name) parents.get(item.name).add(match[1]);
+    }
+  }
+  const ordered = [];
+  const placed = new Set();
+  let progress = true;
+  while (progress) {
+    progress = false;
+    for (const table of [...tables].sort()) {
+      if (placed.has(table)) continue;
+      if ([...parents.get(table)].every(parent => placed.has(parent))) {
+        ordered.push(table);
+        placed.add(table);
+        progress = true;
+      }
+    }
+  }
+  // A reference cycle (or an unexpected reference) must not lose data: append the
+  // rest in a stable order and let the import's own constraints decide.
+  const remaining = tables.filter(table => !placed.has(table)).sort();
+  return { ordered: [...ordered, ...remaining], cycles: remaining };
+}
+
+// Builds a D1-import-compatible dump. Layout, and why:
+//   * `PRAGMA defer_foreign_keys` first, so an importer that honours it is safe;
+//   * per table, create it and insert its rows immediately (parents before
+//     children), which is what makes the file portable to auto-commit importers
+//     such as D1's own import endpoint and the sqlite3 shell;
+//   * indexes, triggers, and views after the data;
+//   * internal bookkeeping rows (sqlite_sequence) last, so AUTOINCREMENT counters
+//     survive a restore.
+export function buildDumpSql({ schema, rowsByTable, internalRowsByTable = {} }) {
+  const { ordered } = orderTablesByDependencies(schema);
+  const byName = new Map(schema.filter(item => item.type === 'table').map(item => [item.name, item]));
   const lines = ['PRAGMA defer_foreign_keys=TRUE;'];
-  const sorted = [...schema].sort((a, b) => (order[a.type] ?? 9) - (order[b.type] ?? 9) || (a.name < b.name ? -1 : 1));
-  for (const item of sorted) lines.push(`${item.sql.trim().replace(/;$/, '')};`);
-  for (const [table, rows] of Object.entries(rowsByTable)) lines.push(...insertStatements(table, rows));
+  for (const table of ordered) {
+    const definition = byName.get(table);
+    if (!definition) continue;
+    lines.push(`${String(definition.sql).trim().replace(/;$/, '')};`);
+    lines.push(...insertStatements(table, rowsByTable[table] ?? []));
+  }
+  const others = schema
+    .filter(item => item.type !== 'table')
+    .sort((a, b) => (a.type < b.type ? -1 : a.type > b.type ? 1 : a.name < b.name ? -1 : 1));
+  for (const item of others) lines.push(`${String(item.sql).trim().replace(/;$/, '')};`);
+  for (const [table, rows] of Object.entries(internalRowsByTable)) lines.push(...insertStatements(table, rows));
   return `${lines.join('\n')}\n`;
 }
 

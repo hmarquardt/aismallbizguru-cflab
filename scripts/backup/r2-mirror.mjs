@@ -47,34 +47,56 @@ export function planMirror({ sourceObjects, mirroredKeys }) {
   return { toCopy, alreadyMirrored: sourceObjects.length - toCopy.length };
 }
 
-export async function mirror({ source, destination, apply = false, limit, log = console.log, stamp = compactStamp() }) {
+// Copies the planned objects with bounded concurrency. Downloads and hashing stay
+// ordered per object, and each object is written under its content address, so
+// parallel copying cannot collide: two workers that hash identical content simply
+// target the same key, and the destination client refuses to overwrite.
+export async function copyPending({ source, destination, toCopy, mirroredKeys, concurrency = 4, limit, log = console.log }) {
+  const existing = new Set(mirroredKeys);
+  const entries = [];
+  let started = 0;
+  let applied = 0;
+  let cursor = 0;
+  const workers = Array.from({ length: Math.max(1, Math.min(concurrency, toCopy.length || 1)) }, async () => {
+    for (;;) {
+      const index = cursor;
+      cursor += 1;
+      if (index >= toCopy.length) return;
+      if (limit !== undefined && started >= limit) return;
+      started += 1;
+      const object = toCopy[index];
+      const body = await source.getObjectBuffer(object.key);
+      if (!body) {
+        log(`WARN  ${object.key} disappeared from the source before it could be copied; leaving the existing mirror alone`);
+        continue;
+      }
+      const digest = sha256Bytes(body);
+      const mirrorKey = mirrorKeyFor(object.key, digest);
+      if (existing.has(mirrorKey)) {
+        entries.push({ key: object.key, mirrorKey, sha256: digest, bytes: body.length, skipped: 'already mirrored' });
+        continue;
+      }
+      await destination.putObject(mirrorKey, body, { contentType: 'application/octet-stream' });
+      existing.add(mirrorKey);
+      applied += 1;
+      entries.push({ key: object.key, mirrorKey, sha256: digest, bytes: body.length, source_etag: object.etag, source_last_modified: object.lastModified });
+    }
+  });
+  await Promise.all(workers);
+  // The manifest must not depend on completion order.
+  entries.sort((a, b) => (a.mirrorKey < b.mirrorKey ? -1 : a.mirrorKey > b.mirrorKey ? 1 : 0));
+  return { entries, applied, started };
+}
+
+export async function mirror({ source, destination, apply = false, limit, concurrency = 4, log = console.log, stamp = compactStamp() }) {
   const sourceObjects = await source.listObjects({ prefix: '' });
   const mirrored = await destination.listObjects({ prefix: `${MIRROR_PREFIX}/` });
   const mirroredKeys = mirrored.map(object => object.key);
   const plan = planMirror({ sourceObjects, mirroredKeys });
-  log(`${apply ? 'APPLY' : 'PLAN '} source ${sourceObjects.length} object(s), mirror ${mirroredKeys.length} object(s), to copy ${plan.toCopy.length}`);
+  log(`${apply ? 'APPLY' : 'PLAN '} source ${sourceObjects.length} object(s), mirror ${mirroredKeys.length} object(s), to copy ${plan.toCopy.length}${apply && concurrency > 1 ? `, concurrency ${concurrency}` : ''}`);
   if (!apply) return { ...plan, entries: [], applied: 0 };
 
-  const entries = [];
-  let applied = 0;
-  for (const object of plan.toCopy) {
-    if (limit !== undefined && applied >= limit) break;
-    const body = await source.getObjectBuffer(object.key);
-    if (!body) {
-      log(`WARN  ${object.key} disappeared from the source before it could be copied; leaving the existing mirror alone`);
-      continue;
-    }
-    const digest = sha256Bytes(body);
-    const mirrorKey = mirrorKeyFor(object.key, digest);
-    if (mirroredKeys.includes(mirrorKey)) {
-      entries.push({ key: object.key, mirrorKey, sha256: digest, bytes: body.length, skipped: 'already mirrored' });
-      continue;
-    }
-    await destination.putObject(mirrorKey, body, { contentType: 'application/octet-stream' });
-    mirroredKeys.push(mirrorKey);
-    applied += 1;
-    entries.push({ key: object.key, mirrorKey, sha256: digest, bytes: body.length, source_etag: object.etag, source_last_modified: object.lastModified });
-  }
+  const copied = await copyPending({ source, destination, toCopy: plan.toCopy, mirroredKeys, concurrency, limit, log });
   const manifest = {
     schema_version: 1,
     kind: 'r2-mirror',
@@ -83,15 +105,16 @@ export async function mirror({ source, destination, apply = false, limit, log = 
     source_bucket: source.bucket,
     destination_bucket: destination.bucket,
     source_objects: sourceObjects.length,
-    mirrored_objects: mirroredKeys.length,
-    copied_this_run: applied,
-    entries,
+    mirrored_objects: mirroredKeys.length + copied.applied,
+    copied_this_run: copied.applied,
+    entries: copied.entries,
   };
   const manifestKey = `${MIRROR_PREFIX}/manifests/r2-${stamp}.json`;
   await destination.putObject(manifestKey, `${JSON.stringify(manifest, null, 2)}\n`, { contentType: 'application/json' });
-  log(`OK    copied ${applied} object(s); manifest ${manifestKey}`);
-  return { ...plan, entries, applied, manifest, manifestKey };
+  log(`OK    copied ${copied.applied} object(s) of ${copied.started} attempted; manifest ${manifestKey}`);
+  return { ...plan, entries: copied.entries, applied: copied.applied, manifest, manifestKey };
 }
+
 
 export async function verifyMirror({ source, destination, manifest, sample = 0, log = console.log }) {
   const entries = manifest.entries ?? [];
@@ -150,6 +173,8 @@ async function main() {
   const destination = r2FromEnvironment();
   const limitIndex = args.indexOf('--limit');
   const limit = limitIndex === -1 ? undefined : Number(args[limitIndex + 1]);
+  const concurrencyIndex = args.indexOf('--concurrency');
+  const concurrency = concurrencyIndex === -1 ? 8 : Math.max(1, Math.min(16, Number(args[concurrencyIndex + 1])));
 
   if (args.includes('--verify')) {
     const manifestIndex = args.indexOf('--manifest');
@@ -162,7 +187,7 @@ async function main() {
     return;
   }
 
-  const result = await mirror({ source, destination, apply: args.includes('--apply'), limit });
+  const result = await mirror({ source, destination, apply: args.includes('--apply'), limit, concurrency });
   const reportIndex = args.indexOf('--report');
   if (reportIndex !== -1 && result.manifest) writeJsonFile(args[reportIndex + 1], result.manifest);
 }

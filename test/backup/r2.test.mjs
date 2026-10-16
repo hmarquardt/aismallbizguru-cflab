@@ -124,6 +124,43 @@ test('mirroring copies only new content and writes a manifest', async () => {
   assert.deepEqual(Object.keys(source.store).sort(), ['a.txt', 'b.txt']);
 });
 
+test('concurrent copying writes every object exactly once and keeps the manifest ordered', async () => {
+  const objects = {};
+  for (let index = 0; index < 25; index += 1) objects[`obj-${index}.bin`] = `content-${index}`;
+  // A second key with identical content is stored at its own path: the mirror key
+  // keeps the original key, so a restore can put every object back where it was.
+  objects['duplicate.bin'] = 'content-0';
+  const source = fakeR2({ objects });
+  const destination = fakeR2();
+  const result = await mirror({
+    source: clientFor(source, 'cflab-files'), destination: clientFor(destination),
+    apply: true, concurrency: 8, log: () => {}, stamp: '20261016T050000Z',
+  });
+
+  const written = Object.keys(destination.store).filter(key => key.startsWith('files/') && !key.startsWith('files/manifests/'));
+  assert.equal(result.applied, 26, 'every source key is copied once');
+  assert.equal(written.length, 26);
+  assert.equal(String(destination.store[mirrorKeyFor('obj-7.bin', sha256Bytes('content-7'))]), 'content-7');
+  assert.equal(String(destination.store[mirrorKeyFor('duplicate.bin', sha256Bytes('content-0'))]), 'content-0');
+
+  const keys = result.manifest.entries.map(entry => entry.mirrorKey);
+  assert.deepEqual(keys, [...keys].sort(), 'the manifest is sorted, so it cannot depend on completion order');
+  // Nothing was lost from the source, and the manifest accounts for the mirror.
+  assert.equal(Object.keys(source.store).length, 26);
+  assert.equal(result.manifest.copied_this_run, 26);
+  assert.equal(result.manifest.mirrored_objects, 26);
+});
+
+test('a copy limit bounds how many objects a run starts', async () => {
+  const objects = {};
+  for (let index = 0; index < 10; index += 1) objects[`obj-${index}.bin`] = `value-${index}`;
+  const result = await mirror({
+    source: clientFor(fakeR2({ objects }), 'cflab-files'), destination: clientFor(fakeR2()),
+    apply: true, limit: 4, concurrency: 3, log: () => {}, stamp: '20261016T060000Z',
+  });
+  assert.equal(result.applied, 4);
+});
+
 test('mirror verification detects corrupted or missing mirror objects', async () => {
   const entryKey = mirrorKeyFor('a.txt', sha256Bytes('one'));
   const manifest = { entries: [{ key: 'a.txt', mirrorKey: entryKey, sha256: sha256Bytes('one'), bytes: 3 }] };

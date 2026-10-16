@@ -117,7 +117,7 @@ jobs:
           R2_SOURCE_SECRET_ACCESS_KEY: ${{ secrets.CFLAB_BACKUP_SOURCE_R2_SECRET_ACCESS_KEY }}
           R2_ACCESS_KEY_ID: ${{ secrets.CFLAB_BACKUP_R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.CFLAB_BACKUP_R2_SECRET_ACCESS_KEY }}
-        run: node scripts/backup/r2-mirror.mjs --apply --limit 500 --report backups/r2-mirror.json
+        run: node scripts/backup/r2-mirror.mjs --apply --limit 2000 --concurrency 8 --report backups/r2-mirror.json
 
       - name: Verify a sample of the mirrored objects
         env:

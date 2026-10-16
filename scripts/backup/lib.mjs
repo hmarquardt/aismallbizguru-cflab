@@ -6,7 +6,8 @@
 // writes to a production database.
 
 import { createHash } from 'node:crypto';
-import { createReadStream, readFileSync, writeFileSync } from 'node:fs';
+import { createReadStream, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
 
 export const MANIFEST_SCHEMA_VERSION = 1;
 
@@ -53,9 +54,53 @@ export function readJsonFile(path) {
   return JSON.parse(readFileSync(path, 'utf8'));
 }
 
-export function writeJsonFile(path, value) {
-  writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
+export function writeJsonFile(filePath, value) {
+  mkdirSync(dirname(filePath), { recursive: true });
+  writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`);
 }
+
+// A canonical, order-independent hash of a table's rows. Both the source query
+// and the restored database are hashed the same way, so a mismatch means the
+// backup did not reproduce the data, not merely that ordering differed.
+export function canonicalRowHash(rows) {
+  const canonical = rows
+    .map(row => JSON.stringify(Object.keys(row).sort().reduce((sorted, key) => {
+      sorted[key] = row[key];
+      return sorted;
+    }, {})))
+    .sort();
+  return sha256Text(canonical.join('\n'));
+}
+
+// SQL literal for a JSON-decoded D1 value. Strings are single-quoted with doubled
+// quotes; numbers, booleans, and NULL map directly. Anything else is encoded as
+// JSON text, which SQLite stores as a valid JSON string value.
+export function sqlLiteral(value) {
+  if (value === null || value === undefined) return 'NULL';
+  if (typeof value === 'number') return Number.isFinite(value) ? String(value) : `'${String(value)}'`;
+  if (typeof value === 'boolean') return value ? '1' : '0';
+  if (typeof value === 'string') return `'${value.replace(/'/g, "''")}'`;
+  return `'${JSON.stringify(value).replace(/'/g, "''")}'`;
+}
+
+export function insertStatements(table, rows) {
+  return rows.map(row => {
+    const columns = Object.keys(row);
+    const values = columns.map(column => sqlLiteral(row[column]));
+    return `INSERT INTO "${table}" (${columns.map(column => `"${column}"`).join(',')}) VALUES(${values.join(',')});`;
+  });
+}
+
+// Builds a D1-import-compatible dump from schema statements and queried rows.
+export function buildDumpSql({ schema, rowsByTable }) {
+  const order = { table: 0, index: 1, trigger: 2, view: 3 };
+  const lines = ['PRAGMA defer_foreign_keys=TRUE;'];
+  const sorted = [...schema].sort((a, b) => (order[a.type] ?? 9) - (order[b.type] ?? 9) || (a.name < b.name ? -1 : 1));
+  for (const item of sorted) lines.push(`${item.sql.trim().replace(/;$/, '')};`);
+  for (const [table, rows] of Object.entries(rowsByTable)) lines.push(...insertStatements(table, rows));
+  return `${lines.join('\n')}\n`;
+}
+
 
 // `wrangler d1 execute --json` prints a single-element array of result objects.
 export function wranglerRows(stdout) {

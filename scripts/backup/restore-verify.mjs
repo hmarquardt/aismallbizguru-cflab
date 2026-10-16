@@ -24,7 +24,7 @@ import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { DATABASES } from './d1-export.mjs';
-import { sha256File, validateManifest, verifyArtifactAgainstManifest, wranglerResultSets, wranglerRows, writeJsonFile } from './lib.mjs';
+import { sha256File, validateManifest, verifyArtifactAgainstManifest, wranglerResultSets, wranglerRows, writeJsonFile, canonicalRowHash } from './lib.mjs';
 
 // Restoring over these would be a production incident, not a drill.
 export const PRODUCTION_DATABASES = new Set([
@@ -47,8 +47,15 @@ export function databaseFor(label) {
 function wranglerRun(args, { allowFailure = false } = {}) {
   const binary = path.join('node_modules', '.bin', 'wrangler');
   if (!existsSync(binary)) throw new Error(`wrangler is not installed at ${binary}; run npm ci first`);
-  const result = spawnSync(binary, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  // Whole-table SELECTs (used for the row-hash comparison) exceed Node's 1 MiB
+  // spawnSync default, so the cap is explicit and a truncated read fails loudly.
+  const maxBuffer = 256 * 1024 * 1024;
+  const result = spawnSync(binary, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer });
   const output = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+  if (result.error) {
+    const code = result.error.code ?? 'unknown';
+    throw new Error(`wrangler ${args.slice(0, 3).join(' ')} could not be read (${code}${code === 'ENOBUFS' ? `: output exceeded the ${maxBuffer}-byte read buffer` : ''})`);
+  }
   if (result.status !== 0 && !allowFailure) {
     throw new Error(`wrangler ${args.slice(0, 3).join(' ')} failed (exit ${result.status ?? 'unknown'}):\n${output.trim()}`);
   }
@@ -88,6 +95,17 @@ export function verifyRestored({ target, config, stateDir, manifest, run = wrang
   const quick = wranglerRows(query({ target, config, stateDir, sql: 'PRAGMA quick_check', run }).output);
   const quickResult = String(quick[0]?.quick_check ?? 'unknown');
   if (quickResult !== 'ok') problems.push(`PRAGMA quick_check reported "${quickResult}"`);
+
+  // When the manifest carries per-table row hashes, compare them: identical data
+  // with different ordering must match, and any data difference must fail.
+  if (manifest.row_hashes) {
+    for (const table of shared) {
+      if (!manifest.row_hashes[table]) continue;
+      const rows = wranglerRows(query({ target, config, stateDir, sql: `SELECT * FROM "${table}"`, run }).output);
+      const digest = canonicalRowHash(rows);
+      if (digest !== manifest.row_hashes[table]) problems.push(`restored "${table}" does not reproduce the backed-up rows (row hash ${digest.slice(0, 12)}… vs ${manifest.row_hashes[table].slice(0, 12)}…)`);
+    }
+  }
 
   const foreignKeys = wranglerRows(query({ target, config, stateDir, sql: 'PRAGMA foreign_key_check', run }).output);
   if (foreignKeys.length) problems.push(`PRAGMA foreign_key_check reported ${foreignKeys.length} violation(s)`);

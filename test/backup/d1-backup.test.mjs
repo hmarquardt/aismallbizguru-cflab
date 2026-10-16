@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  buildDumpSql, canonicalRowHash, sqlLiteral,
   backupKeys, buildManifest, compactStamp, inspectExportSql, validateManifest, verifyArtifactAgainstManifest, verifyExport,
 } from '../../scripts/backup/lib.mjs';
 import { assessFreshness } from '../../scripts/backup/backup-status.mjs';
@@ -154,4 +155,40 @@ test('the backup tooling targets the documented production databases', () => {
   for (const database of DATABASES) {
     assert.ok(database.config.endsWith('.jsonc') && database.localConfig.includes('local'), `${database.label} needs both configs`);
   }
+});
+
+test('SQL literals encode every value type safely', () => {
+  assert.equal(sqlLiteral(null), 'NULL');
+  assert.equal(sqlLiteral(undefined), 'NULL');
+  assert.equal(sqlLiteral(42), '42');
+  assert.equal(sqlLiteral(-1.5), '-1.5');
+  assert.equal(sqlLiteral(true), '1');
+  assert.equal(sqlLiteral(false), '0');
+  assert.equal(sqlLiteral("it's"), "'it''s'");
+  assert.equal(sqlLiteral("a'b'c"), "'a''b''c'");
+  assert.equal(sqlLiteral({ a: 1 }), `'{"a":1}'`);
+  assert.equal(sqlLiteral('line\nbreak'), "'line\nbreak'");
+});
+
+test('a dump is a faithful, import-safe SQL file', () => {
+  const sql = buildDumpSql({
+    schema: [
+      { type: 'index', name: 'files_by_record', sql: 'CREATE INDEX files_by_record ON files(app_id)' },
+      { type: 'table', name: 'files', sql: 'CREATE TABLE files (id TEXT, filename TEXT)' },
+    ],
+    rowsByTable: { files: [{ id: 'a', filename: "O'Brien.jpg" }, { id: 'b', filename: null }] },
+  });
+  assert.ok(sql.startsWith('PRAGMA defer_foreign_keys=TRUE;\n'));
+  assert.ok(sql.indexOf('CREATE TABLE files') < sql.indexOf('CREATE INDEX files_by_record'), 'tables are created before their indexes');
+  assert.match(sql, /INSERT INTO "files" \("id","filename"\) VALUES\('a','O''Brien\.jpg'\);/);
+  assert.match(sql, /INSERT INTO "files" \("id","filename"\) VALUES\('b',NULL\);/);
+  assert.doesNotMatch(sql, /BEGIN TRANSACTION|COMMIT/);
+});
+
+test('row hashes are order-independent and detect any data change', () => {
+  const rows = [{ id: 'a', n: 1 }, { id: 'b', n: 2 }];
+  assert.equal(canonicalRowHash(rows), canonicalRowHash([{ id: 'b', n: 2 }, { id: 'a', n: 1 }]));
+  assert.equal(canonicalRowHash(rows), canonicalRowHash([{ n: 1, id: 'a' }, { n: 2, id: 'b' }]));
+  assert.notEqual(canonicalRowHash(rows), canonicalRowHash([{ id: 'a', n: 1 }, { id: 'b', n: 3 }]));
+  assert.notEqual(canonicalRowHash(rows), canonicalRowHash([{ id: 'a', n: 1 }]));
 });

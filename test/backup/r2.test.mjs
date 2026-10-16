@@ -161,6 +161,42 @@ test('a copy limit bounds how many objects a run starts', async () => {
   assert.equal(result.applied, 4);
 });
 
+test('transient read failures are retried, but real errors are not', async () => {
+  const attempts = [];
+  const flaky = async (url, init = {}) => {
+    attempts.push(init.method ?? 'GET');
+    if (attempts.length <= 2) return new Response('server error', { status: 500 });
+    return new Response('<?xml version="1.0"?><ListBucketResult><IsTruncated>false</IsTruncated></ListBucketResult>', { status: 200 });
+  };
+  const client = createR2Client({ accountId: 'acct', bucket: 'cflab-backups', accessKeyId: 'AK', secretAccessKey: 'SK', fetchImpl: flaky, wait: async () => {} });
+  assert.deepEqual(await client.listObjects({}), []);
+  assert.equal(attempts.length, 3, 'two failures then a success');
+
+  let deniedCalls = 0;
+  const denied = async () => { deniedCalls += 1; return new Response('denied', { status: 403 }); };
+  const deniedClient = createR2Client({ accountId: 'acct', bucket: 'cflab-files', accessKeyId: 'AK', secretAccessKey: 'SK', fetchImpl: denied, wait: async () => {} });
+  await assert.rejects(deniedClient.listObjects({}), /HTTP 403/);
+  assert.equal(deniedCalls, 1, 'a scope denial is not retried');
+
+  let networkCalls = 0;
+  const flakyNetwork = async () => { networkCalls += 1; if (networkCalls === 1) throw new Error('socket hang up'); return new Response(null, { status: 404 }); };
+  const networkClient = createR2Client({ accountId: 'acct', bucket: 'cflab-backups', accessKeyId: 'AK', secretAccessKey: 'SK', fetchImpl: flakyNetwork, wait: async () => {} });
+  assert.equal(await networkClient.headObject('missing'), null);
+  assert.equal(networkCalls, 2, 'a network blip is retried');
+});
+
+test('writes are single-shot so a failed write is never silently retried', async () => {
+  let puts = 0;
+  const fetchImpl = async (url, init = {}) => {
+    if ((init.method ?? 'GET') === 'HEAD') return new Response(null, { status: 404 });
+    puts += 1;
+    return new Response('transient', { status: 500 });
+  };
+  const client = createR2Client({ accountId: 'acct', bucket: 'cflab-backups', accessKeyId: 'AK', secretAccessKey: 'SK', fetchImpl, wait: async () => {} });
+  await assert.rejects(client.putObject('files/x', 'data'), /HTTP 500/);
+  assert.equal(puts, 1, 'the write is attempted once and the run fails, so the next run resumes');
+});
+
 test('mirror verification detects corrupted or missing mirror objects', async () => {
   const entryKey = mirrorKeyFor('a.txt', sha256Bytes('one'));
   const manifest = { entries: [{ key: 'a.txt', mirrorKey: entryKey, sha256: sha256Bytes('one'), bytes: 3 }] };

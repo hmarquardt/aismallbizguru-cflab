@@ -74,7 +74,14 @@ export function signRequest({ method, path, query, headers, payloadHash, accessK
 // putObject, and there is no delete method by design. `readOnly: true` removes the
 // write path entirely, which is how the production bucket is accessed: the backup
 // tooling cannot write to production even if it is asked to.
-export function createR2Client({ accountId, bucket, accessKeyId, secretAccessKey, fetchImpl = fetch, region = 'auto', clock = () => new Date(), readOnly = false }) {
+//
+// Idempotent reads (list, head, get) retry transient failures — 5xx, 429, and
+// network errors — because a single blip in a long mirror run should not cost the
+// whole run. Writes are deliberately single-shot: a retried PUT whose first
+// attempt actually succeeded would be refused as an overwrite, so a failed write
+// fails the run, and the next run resumes from the objects that are already
+// mirrored.
+export function createR2Client({ accountId, bucket, accessKeyId, secretAccessKey, fetchImpl = fetch, region = 'auto', clock = () => new Date(), readOnly = false, maxAttempts = 3, wait = ms => new Promise(resolve => setTimeout(resolve, ms)) }) {
   if (!accountId || !bucket) throw new Error('an R2 client needs an account id and a bucket');
   const host = `${accountId}.r2.cloudflarestorage.com`;
 
@@ -103,6 +110,28 @@ export function createR2Client({ accountId, bucket, accessKeyId, secretAccessKey
     return response;
   }
 
+  // Retries only what is safe to repeat: reads and network-level failures.
+  async function requestWithRetry(options) {
+    const retryable = options.method !== 'PUT';
+    let lastError;
+    for (let attempt = 1; attempt <= (retryable ? maxAttempts : 1); attempt += 1) {
+      try {
+        const response = await request(options);
+        if (retryable && attempt < maxAttempts && (response.status >= 500 || response.status === 429)) {
+          lastError = new Error(`HTTP ${response.status}`);
+          await wait(250 * attempt);
+          continue;
+        }
+        return response;
+      } catch (error) {
+        lastError = error;
+        if (!retryable || attempt >= maxAttempts) throw error;
+        await wait(250 * attempt);
+      }
+    }
+    throw new Error(`R2 ${options.method} ${options.key || ''} failed after ${maxAttempts} attempt(s): ${lastError?.message ?? 'unknown error'}`);
+  }
+
   return {
     bucket,
     // Read-only: list objects under a prefix, following continuation tokens.
@@ -110,7 +139,7 @@ export function createR2Client({ accountId, bucket, accessKeyId, secretAccessKey
       const objects = [];
       let token;
       for (let page = 0; page < maxPages; page += 1) {
-        const response = await request({ method: 'GET', query: { 'list-type': '2', prefix, 'max-keys': String(maxKeys), 'continuation-token': token } });
+        const response = await requestWithRetry({ method: 'GET', query: { 'list-type': '2', prefix, 'max-keys': String(maxKeys), 'continuation-token': token } });
         if (response.status !== 200) throw new Error(`R2 listObjects failed: HTTP ${response.status} ${await response.text().catch(() => '')}`.trim());
         const xml = await response.text();
         for (const match of xml.matchAll(/<Contents>([\s\S]*?)<\/Contents>/g)) {
@@ -130,7 +159,7 @@ export function createR2Client({ accountId, bucket, accessKeyId, secretAccessKey
       return objects;
     },
     async headObject(key) {
-      const response = await request({ method: 'HEAD', key });
+      const response = await requestWithRetry({ method: 'HEAD', key });
       if (response.status === 404) return null;
       if (response.status !== 200) throw new Error(`R2 headObject ${key} failed: HTTP ${response.status}`);
       return {
@@ -141,14 +170,14 @@ export function createR2Client({ accountId, bucket, accessKeyId, secretAccessKey
       };
     },
     async getObject(key) {
-      const response = await request({ method: 'GET', key });
+      const response = await requestWithRetry({ method: 'GET', key });
       if (response.status === 404) return null;
       if (response.status !== 200) throw new Error(`R2 getObject ${key} failed: HTTP ${response.status}`);
       return await response.text();
     },
     // Binary variant, used by the mirror so object bytes are hashed exactly.
     async getObjectBuffer(key) {
-      const response = await request({ method: 'GET', key });
+      const response = await requestWithRetry({ method: 'GET', key });
       if (response.status === 404) return null;
       if (response.status !== 200) throw new Error(`R2 getObject ${key} failed: HTTP ${response.status}`);
       return Buffer.from(await response.arrayBuffer());

@@ -111,7 +111,8 @@ export async function verifyMirror({ source, destination, manifest, sample = 0, 
   return { ok: problems.length === 0, verified: selected.length, problems };
 }
 
-// The source is read-only and defaults to the production file bucket.
+// The source is read-only and defaults to the production file bucket: the client
+// is created with readOnly so a write to production is impossible, not just unused.
 export function sourceClientFromEnvironment(env = process.env, { fetchImpl } = {}) {
   const bucket = env.CFLAB_FILES_BUCKET ?? 'cflab-files';
   const accountId = env.CLOUDFLARE_ACCOUNT_ID ?? env.R2_ACCOUNT_ID;
@@ -120,7 +121,7 @@ export function sourceClientFromEnvironment(env = process.env, { fetchImpl } = {
   const missing = Object.entries({ CLOUDFLARE_ACCOUNT_ID: accountId, R2_ACCESS_KEY_ID: accessKeyId, R2_SECRET_ACCESS_KEY: secretAccessKey })
     .filter(([, value]) => !value).map(([name]) => name);
   if (missing.length) throw new Error(`missing R2 read configuration: ${missing.join(', ')} (see docs/BACKUP-RESTORE.md)`);
-  return createR2Client({ accountId, bucket, accessKeyId, secretAccessKey, fetchImpl });
+  return createR2Client({ accountId, bucket, accessKeyId, secretAccessKey, fetchImpl, readOnly: true });
 }
 
 async function main() {

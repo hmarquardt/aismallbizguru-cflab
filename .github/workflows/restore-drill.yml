@@ -12,9 +12,13 @@ name: restore drill
 on:
   workflow_dispatch:
     inputs:
-      confirm:
-        description: 'Type RESTORE-DRILL to create temporary D1 databases and restore a backup into them'
+      mode:
+        description: 'prepare (plan only, creates nothing) or execute (creates temporary databases)'
         required: true
+        default: 'prepare'
+      confirm:
+        description: 'For mode=execute: type RESTORE-DRILL to authorize creating temporary D1 databases'
+        required: false
         default: 'no'
       database:
         description: 'Which backup to drill: cflab, cflab-analytics, or both'
@@ -38,7 +42,7 @@ env:
 jobs:
   drill:
     name: restore drill
-    if: inputs.confirm == 'RESTORE-DRILL'
+    if: inputs.mode == 'prepare' || inputs.confirm == 'RESTORE-DRILL'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -66,8 +70,21 @@ jobs:
             fi
           done
 
+      # Plan only: state exactly what would be created and restored, and prove the
+      # artifact restores locally. Nothing cloud-side is created in this mode.
+      - name: Prepare the drill (no cloud resources)
+        run: |
+          set -euo pipefail
+          for manifest in drill/*.manifest.json; do
+            database=$(node -e "console.log(require('./'+process.argv[1]).database)" "$manifest")
+            echo "PLAN  ${database}: would create cflab-restore-${database}-<stamp> (temporary), restore it, verify it, then print the teardown command"
+            node scripts/backup/restore-verify.mjs --manifest "$manifest" --work-dir drill/local
+          done
+          echo "PLAN  execute mode is gated: dispatch again with mode=execute and confirm=RESTORE-DRILL"
+
       # Each manifest becomes its own temporary database; nothing existing is touched.
       - name: Create temporary databases and restore into them
+        if: inputs.mode == 'execute'
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CFLAB_RESTORE_D1_TOKEN }}
         run: |

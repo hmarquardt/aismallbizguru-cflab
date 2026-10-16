@@ -88,6 +88,7 @@ Local development and validation are always safe and never deploy:
 | `node scripts/backup/restore-verify.mjs --manifest <m>` | Restore a backup into an isolated local database and verify it. |
 | `node scripts/backup/backup-status.mjs` | Read-only backup freshness report; fails when a backup is stale. |
 | `node scripts/backup/r2-mirror.mjs --plan` | Plan the append-only file mirror (add `--apply` to copy). Never deletes. |
+| `node scripts/backup/verify-setup.mjs` | Verify the backup bucket, lock/lifecycle rules, public access, and credentials before activation. |
 | `npm run deploy` | **Refuses.** Prints this policy. Releases come from GitHub Actions. |
 
 ## Working agreement

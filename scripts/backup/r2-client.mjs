@@ -71,8 +71,10 @@ export function signRequest({ method, path, query, headers, payloadHash, accessK
 }
 
 // A tiny S3 client scoped to one R2 bucket. Every method is read-only except
-// putObject, and there is no delete method by design.
-export function createR2Client({ accountId, bucket, accessKeyId, secretAccessKey, fetchImpl = fetch, region = 'auto', clock = () => new Date() }) {
+// putObject, and there is no delete method by design. `readOnly: true` removes the
+// write path entirely, which is how the production bucket is accessed: the backup
+// tooling cannot write to production even if it is asked to.
+export function createR2Client({ accountId, bucket, accessKeyId, secretAccessKey, fetchImpl = fetch, region = 'auto', clock = () => new Date(), readOnly = false }) {
   if (!accountId || !bucket) throw new Error('an R2 client needs an account id and a bucket');
   const host = `${accountId}.r2.cloudflarestorage.com`;
 
@@ -153,6 +155,7 @@ export function createR2Client({ accountId, bucket, accessKeyId, secretAccessKey
     },
     // The only mutating operation, and it refuses to replace an existing object.
     async putObject(key, body, { contentType = 'application/octet-stream', ifNoneMatch = true } = {}) {
+      if (readOnly) throw new Error(`refusing to write to ${bucket}: this client is read-only (production access must never write)`);
       const existing = await this.headObject(key);
       if (existing) throw new Error(`refusing to overwrite an existing backup object: ${bucket}/${key}`);
       const response = await request({ method: 'PUT', key, body, contentType });

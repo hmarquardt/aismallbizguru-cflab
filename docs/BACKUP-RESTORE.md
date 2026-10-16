@@ -190,6 +190,11 @@ credentials are not used for releases.
 
 ### 5.3 Activate
 
+0. Confirm the setup in one command, which fails closed on anything missing:
+   `node scripts/backup/verify-setup.mjs` (add `--probe-write` to also prove that
+   the credentials can write to the backup bucket; it writes one small object under
+   `_verify/` and never overwrites). It checks the bucket, the lock and lifecycle
+   rules, public access, production read, and backup read/write.
 1. Create the bucket, lock rules, and lifecycle rules (§5.1).
 2. Create the two API tokens and the R2 S3 credentials (§5.2), add them as
    secrets, and set the `CFLAB_BACKUP_BUCKET` variable.
@@ -197,9 +202,18 @@ credentials are not used for releases.
    (Actions → production backups → Run workflow) and confirm all four steps pass
    and that the freshness report is green.
 4. Only then set `CFLAB_BACKUPS_ENABLED=true` so the daily schedule starts.
-5. Schedule the drill: run `restore drill` (Actions → restore drill → Run
-   workflow, `confirm=RESTORE-DRILL`) once, verify the result, and tear the
-   temporary databases down with the command the run prints. Repeat quarterly.
+5. Run the drill in **prepare** mode first (`restore drill` → `mode=prepare`): it
+   downloads and verifies the newest stored backup and restores it locally, and
+   prints exactly what an execute run would create — without creating anything.
+   Then run `mode=execute` with `confirm=RESTORE-DRILL`, verify the result, and
+   tear the temporary databases down with the command the run prints. Repeat
+   quarterly.
+
+Production access is read-only by construction, not by convention: the mirror's
+source client is created with `readOnly: true`, so `putObject` throws before any
+request is signed (`test/backup/verify-setup.test.mjs` asserts this). The S3
+credentials should still be scoped to read-only on `cflab-files`; the code
+guarantee is the second layer.
 
 ## 6. Recovery procedures
 
@@ -343,29 +357,51 @@ CFLAB_BACKUP_BUCKET=cflab-backups R2_ACCESS_KEY_ID=… R2_SECRET_ACCESS_KEY=… 
 
 ## 10. Status and what still needs approval
 
-Implemented, committed, and tested in this phase:
+Implemented, committed, and tested:
 
-* `scripts/backup/{lib,d1-export,restore-verify,upload-backups,download-backup,backup-status,r2-mirror,r2-client}.mjs`
+* `scripts/backup/{lib,d1-export,restore-verify,upload-backups,download-backup,backup-status,r2-mirror,r2-client,verify-setup}.mjs`
 * `.github/workflows/backup.yml` (daily + manual, gated by `CFLAB_BACKUPS_ENABLED`)
-* `.github/workflows/restore-drill.yml` (manual, confirmation-gated)
-* `test/backup/*.test.mjs` (21 tests: SigV4 vector, export verification, manifest
-  integrity, freshness, mirror planning/verification, credential guards, and the
-  production-target refusal)
+* `.github/workflows/restore-drill.yml` (manual; `mode=prepare` creates nothing,
+  `mode=execute` needs `confirm=RESTORE-DRILL`)
+* `test/backup/*.test.mjs` (29 tests: SigV4 vector, export verification, manifest
+  integrity, freshness, mirror planning/verification, setup-policy evaluation,
+  credential guards, the read-only production client, and the production-target
+  refusal)
 
-Waiting for operator action (nothing runs until these are done):
+### Verified 2026-10-16 (Phase 4B)
 
-1. **Authorization to create `cflab-backups`** (free to create; storage stays
-   inside the R2 free tier) with the lock and lifecycle rules in §5.1.
-2. **Three credentials** (§5.2) added as GitHub secrets, plus the
-   `CFLAB_BACKUP_BUCKET` variable.
-3. **First manual backup run**, then `CFLAB_BACKUPS_ENABLED=true`.
-4. **Authorization to run the remote restore drill**, which creates temporary D1
-   databases (billable, deleted afterwards by the printed teardown command).
-5. **A decision on off-account retention** (not implemented here).
-6. **A later, separate decision about the legacy LabBox archives** (§8).
+| Check | Result |
+| --- | --- |
+| Backup bucket `cflab-backups` | **does not exist** — the API returns `The specified bucket does not exist` (code 10006) for bucket info, lock, and lifecycle, and it is absent from the bucket list |
+| Bucket lock rules | cannot exist without the bucket (verified absent) |
+| Lifecycle rules | cannot exist without the bucket (verified absent) |
+| Public access | not applicable until the bucket exists |
+| GitHub backup credentials | not present in this environment; repository variables and secrets cannot be read or set without repository authorization, and `gh` is not authenticated here |
+| Production R2 (unchanged) | `cflab-files`: 1,329 objects, 267 MB; the `files` table records 1,325 rows / 266,972,411 bytes, so **4 objects are not represented in the table** — enumerating them needs S3 credentials, which do not exist yet |
+| Real D1 export + isolated restore (repeated) | `cflab` 11,269,440 bytes / sha256 `6b5a87aa…` / 12 tables / 2,746 rows; `cflab-analytics` 696,164 bytes / sha256 `3c287493…` / 16 tables / 1,268 rows; both restored with `quick_check=ok`, no foreign-key violations, restore 10.7 s and 5.0 s |
 
-Until items 1–3 are done, no backup runs and production is protected only by Time
-Travel, exactly as before this phase.
+### Blockers to activation, in order
+
+1. **Create `cflab-backups`** with the lock and lifecycle rules in §5.1. This is
+   the one prerequisite only the account owner can perform.
+2. **Create the three credentials** (§5.2) and add them as GitHub secrets plus the
+   `CFLAB_BACKUP_BUCKET` variable. Without them the workflow's first step fails
+   loudly instead of silently skipping.
+3. **Run `node scripts/backup/verify-setup.mjs`** — it must print `PASS` before
+   anything is scheduled.
+4. **Run `production backups` manually once**, then set
+   `CFLAB_BACKUPS_ENABLED=true` for the daily schedule.
+5. **Authorize the remote drill** (`restore drill` → `mode=execute`,
+   `confirm=RESTORE-DRILL`), which creates temporary billable databases that the
+   run then tells you how to delete. `mode=prepare` needs no authorization and
+   creates nothing.
+6. **Decide on off-account retention** (not implemented here).
+7. **A later, separate decision about the legacy LabBox archives** (§8).
+
+Until 1–4 are done, no backup runs and production is protected only by Time
+Travel, exactly as before this phase; `cflab-files` has no protection against an
+accidental delete or overwrite.
+
 
 
 

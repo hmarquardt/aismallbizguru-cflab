@@ -115,6 +115,20 @@ jobs:
             echo "npx wrangler d1 delete ${temp} --config wrangler.jsonc --skip-confirmation" >> drill/teardown.txt
           done
 
+      # Keep the evidence: the reports and the teardown commands survive the run, so
+      # "the restore was verified" stays auditable after the temporary databases are
+      # deleted.
+      - name: Upload the drill evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: restore-drill-${{ github.run_id }}
+          path: |
+            drill/*.json
+            drill/teardown.txt
+          if-no-files-found: warn
+          retention-days: 90
+
       - name: Record the drill
         if: always()
         run: |

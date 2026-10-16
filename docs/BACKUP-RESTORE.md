@@ -59,14 +59,15 @@ discrepancy, recorded here rather than changed.
 
 ## 2. Architecture
 
-**Selected: GitHub Actions (scheduled, credential-gated) using `wrangler d1
-export` for the databases and a small dependency-free S3 client for R2.**
+**Selected: GitHub Actions (scheduled, credential-gated) using a read-only
+single-transaction logical dump for the databases and a small dependency-free S3
+client for R2.**
 
 | Decision | Why |
 | --- | --- |
-| GitHub Actions over a Worker Cron Trigger | A Worker cannot call the D1 export API without embedding a Cloudflare API token in the Worker, and R2 object listing/copying is S3-only. GitHub Actions already owns releases, keeps the scripts versioned, needs no always-on compute, and gives per-run logs and failure reporting. |
-| `wrangler d1 export` over the async REST API | Both are supported; the CLI export is synchronous and simple, and at 12 MB it completes in seconds. The REST API is the documented path for very large databases. |
-| Logical exports over Time Travel alone | Time Travel is in-database and bounded (30 days paid / 7 days free). An independent artifact in a separate bucket survives a database deletion, a bad migration, or a compromised production credential. |
+| GitHub Actions over a Worker Cron Trigger | A Worker cannot reach D1's import/export endpoints without embedding a Cloudflare API token in the Worker, and R2 object listing/copying is S3-only. GitHub Actions already owns releases, keeps the scripts versioned, needs no always-on compute, and gives per-run logs and failure reporting. |
+| A read-only `SELECT` dump over the export API | The export API is consistent (it reports `at_bookmark`) but requires **D1 Write**, which would give the backup job write access to production. Reading every table inside one request gives the same single-transaction consistency with a **D1 Read** credential, and is 5× faster here (§7.3). `--method export` remains for an operator who holds a write-capable token. |
+| Logical dumps over Time Travel alone | Time Travel is in-database and bounded (30 days paid / 7 days free). An independent artifact in a separate bucket survives a database deletion, a bad migration, or a compromised production credential. |
 | Append-only content-addressed R2 mirror | A plain mirror propagates deletions. `files/<sha256>/<key>` keeps every version, survives deletion and replacement, and makes integrity verification a hash comparison. |
 | Separate backup and restore credentials | The scheduled job can export and write backups; only a manually dispatched drill has D1 write access. |
 | No new dependency | The S3 client is ~150 lines of SigV4 verified against AWS's published test vector, instead of a new SDK dependency. |
@@ -97,10 +98,10 @@ created by this phase.
 | Scenario | Recovery point objective | Recovery time objective |
 | --- | --- | --- |
 | Accidental row change or deletion | minutes (Time Travel, 30 days) | < 15 min |
-| Bad migration | to just before the migration (pre-migration bookmark is recorded in the release summary) | < 15 min |
-| Database corruption or loss | ≤ 24 h (daily logical backup) | < 1 h |
-| Accidental object deletion or replacement | ≤ 24 h (mirror run), any earlier version preserved | < 15 min for one object |
-| Full loss of the Cloudflare account | ≤ 24 h, and only if the backup bucket is exported off-account | hours — out of scope, documented as a limitation |
+| Bad migration | to just before the migration (record the bookmark first, §6.3) | < 15 min |
+| Database corruption or loss | ≤ 24 h (daily logical backup) | **measured: 2 m 09 s** to restore both databases into new D1 databases and verify them (§7.1) |
+| Accidental object deletion or replacement | ≤ 24 h (mirror run), any earlier version preserved | seconds to recover one object from the mirror (§7.4) |
+| Full loss of the Cloudflare account | ≤ 24 h, and only if the backup bucket is exported off-account | hours — out of scope, documented as a limitation (§6.4) |
 
 Daily is adequate for a workload of ~2,700 database rows and 267 MB of files, and
 the cron can be tightened (for example `17 */6 * * *`) without changing anything
@@ -134,14 +135,23 @@ Two properties matter here:
 is gated by the repository variable `CFLAB_BACKUPS_ENABLED == 'true'`:
 
 1. `d1-export.mjs` — read-only introspection, then a **read-only logical dump** of
-   both databases: the schema from `sqlite_schema` and every row of every table
-   through `SELECT`, so the backup credential only ever needs **D1 Read**.
-   `wrangler d1 export` is deliberately *not* the default: CI proved the export API
-   requires **D1 Write** (the read-only token gets `Authentication error [code
-   10000]`), and widening the backup credential to write access to production data
-   would defeat the point. `--method export` still uses it for an operator who
-   holds a write-capable token. Either way: structural verification, SHA-256,
-   manifest, and a checksum file.
+   both databases: the schema from `sqlite_schema`, every row of every table, and
+   `sqlite_sequence`, all through `SELECT`, so the backup credential only ever needs
+   **D1 Read**. Two properties make the dump restorable and consistent:
+   * **One request, one transaction.** Every table is read inside a single request.
+     D1 executes the statements of one request in one transaction, so the reads share
+     a snapshot. Separate requests do not: measured on a temporary database under
+     concurrent two-table commits, per-request reads tore 84% of the time and
+     single-request reads never did (§7.3). The manifest records
+     `consistency: single-request-snapshot`; if the single request ever fails, the
+     fallback to per-table reads is recorded as `per-table-reads-not-a-snapshot`.
+   * **Foreign-key ordered.** Tables are created and populated parents-before-children,
+     taken from the live `REFERENCES` clauses, so the file imports in auto-commit mode
+     — D1's import endpoint and the `sqlite3` shell included. This is not theoretical:
+     an alphabetical dump failed every remote restore until it was fixed (§7.2).
+   `wrangler d1 export` is deliberately *not* the default: the export API requires
+   **D1 Write**, which would mean giving the backup job write access to production
+   data. `--method export` still uses it for an operator who holds such a token.
 2. `restore-verify.mjs` — restores each dump into an isolated local D1, then
    compares tables, row counts, `PRAGMA quick_check`, `PRAGMA foreign_key_check`,
    and **a canonical per-table row hash recorded in the manifest**. That last check
@@ -340,12 +350,50 @@ account, follow §5.1 first.
 ### 6.1 One database, from a logical backup
 
 ```sh
-# 1. Fetch the newest stored backup and verify it against its manifest
-R2_ACCESS_KEY_ID=… R2_SECRET_ACCESS_KEY=… CFLAB_BACKUP_BUCKET=cflab-backups CLOUDFLARE_ACCOUNT_ID=b1aa310aa0a1638d72b8b086a21e557c \
-  node scripts/backup/download-backup.mjs --database cflab --out recovery
+# 0. Credentials: reading the backup bucket needs the backup pair;
+#    creating/restoring a temporary database needs CFLAB_RESTORE_D1_TOKEN (D1 Write).
+export CFLAB_BACKUP_BUCKET=cflab-backups CLOUDFLARE_ACCOUNT_ID=b1aa310aa0a1638d72b8b086a21e557c
+export R2_ACCESS_KEY_ID=… R2_SECRET_ACCESS_KEY=…
 
-# 2. Restore it into an isolated database first, and look at the result
+# 1. Fetch the newest stored backup; the artifact's size and SHA-256 are checked
+#    against its manifest before it is written locally.
+node scripts/backup/download-backup.mjs --database cflab --out recovery
+
+# 2. Restore it locally first (isolated SQLite, no cloud resources).
 node scripts/backup/restore-verify.mjs --manifest recovery/cflab-*.manifest.json --work-dir recovery/drill
+
+# 3. Prove it in a real D1 database: create a clearly named temporary one and restore
+#    the artifact into it. This is the step that exercises the real import path.
+export CLOUDFLARE_API_TOKEN=…   # CFLAB_RESTORE_D1_TOKEN
+npx wrangler d1 create cflab-recovery-$(date -u +%Y%m%dT%H%M%SZ) --config wrangler.jsonc
+#    Write a config that declares that temporary database (see the drill workflow for
+#    the exact JSON), then:
+node scripts/backup/restore-verify.mjs \
+  --manifest recovery/cflab-<stamp>.manifest.json \
+  --remote-database cflab-recovery-<stamp> --remote-config recovery/cflab.config.json \
+  --allow-remote-write
+#    Tear it down when satisfied (only this database):
+npx wrangler d1 delete cflab-recovery-<stamp> --config wrangler.jsonc --skip-confirmation
+```
+
+**Applying a backup to a database that already has data does not work as-is.** The
+dump contains `CREATE TABLE` statements, so the production-writing shortcut
+
+```sh
+CLOUDFLARE_API_TOKEN=… npx wrangler d1 execute DB --remote --config wrangler.jsonc --file recovery/cflab-<stamp>.sql -y
+```
+
+only applies to an **empty** database — which is exactly the disaster case it is for
+(new database, then repoint the `DB` binding). Choose the path that matches the
+situation:
+
+| Situation | Path |
+| --- | --- |
+| A row was changed or deleted by mistake | Time Travel restore to just before the change (§6.3) — in place, no export needed, 30-day window |
+| A handful of rows must be restored into a live database | Extract those rows from the dump and apply them as `UPDATE` / `INSERT OR REPLACE` statements; do not run the whole file |
+| The database is corrupt, deleted, or lost | Create a new D1 database, import the dump into it (the drill's step 3), then move the binding to it |
+| The whole account is lost | Out of scope (§6.4) |
+
 
 # 3. Restore into production only when that is the deliberate decision
 CLOUDFLARE_API_TOKEN=… npx wrangler d1 execute DB --remote --config wrangler.jsonc --file recovery/cflab-<stamp>.sql -y
@@ -355,80 +403,274 @@ Step 3 is the only production-writing command in this document. It replaces rows
 in place; it does not drop the schema. For a partial recovery, extract the needed
 `INSERT` statements from the SQL file and run those instead of the whole file.
 
-### 6.2 A single object
+### 6.2 A single object (deleted or replaced)
+
+`r2-recover.mjs` reads the mirror, lists every version it holds for a key, downloads
+the one you choose into an isolated directory, and verifies the bytes against the
+content address they were stored under. It is read-only on both buckets.
 
 ```sh
-# List what the mirror holds for one source key (content-addressed by SHA-256)
-node -e "…" # or use any S3 client with the backup credentials
-# Copy the version you want back into production
-aws s3 cp --endpoint-url https://<account>.r2.cloudflarestorage.com \
-  s3://cflab-backups/files/<sha256>/<original/key> s3://cflab-files/<original/key>
+# What does the mirror hold for this key? (versions, sizes, timestamps)
+export CFLAB_BACKUP_BUCKET=cflab-backups CLOUDFLARE_ACCOUNT_ID=b1aa310aa0a1638d72b8b086a21e557c
+export R2_ACCESS_KEY_ID=… R2_SECRET_ACCESS_KEY=…              # backup bucket
+export R2_SOURCE_ACCESS_KEY_ID=… R2_SOURCE_SECRET_ACCESS_KEY=… # production, read-only
+node scripts/backup/r2-recover.mjs --list apps/wildlife-field-recorder/files/<id>
+
+# Which keys have more than one version (i.e. were replaced while mirrored)?
+node scripts/backup/r2-recover.mjs --list-duplicates
+
+# Recover the newest version, or a specific superseded one, into an isolated directory
+node scripts/backup/r2-recover.mjs --key apps/.../files/<id> --out /tmp/recovery --report /tmp/recovery.json
+node scripts/backup/r2-recover.mjs --key apps/.../files/<id> --sha256 <older digest> --out /tmp/recovery
 ```
 
-`wrangler r2 object get cflab-backups/files/<sha256>/<key> --file <path>` then
-`wrangler r2 object put cflab-files/<key> --file <path> --force` also works without
-an S3 client. Restoring one object does not require touching any database.
+The command prints whether the recovered bytes match the current production object,
+so "the mirror still has the version that was replaced" is a check, not a hope.
+Putting it back is the deliberate step:
+
+```sh
+npx wrangler r2 object put cflab-files/apps/.../files/<id> --file /tmp/recovery/apps/.../files/<id> --force
+```
+
+Without an S3 client, `wrangler r2 object get cflab-backups/files/<sha256>/<key> --file <path>`
+followed by the `object put` above also works. Restoring one object never touches a
+database; a `files` row for a file that no database references is restored separately
+(§6.1).
 
 ### 6.3 Point-in-time recovery (no backup needed)
 
+For an accidental `UPDATE`/`DELETE` or a bad migration, this is the fastest and most
+precise path: it restores the whole database in place to a moment you choose, without
+an export. It works on the last 30 days (Workers Paid) / 7 days (Free).
+
 ```sh
-npx wrangler d1 time-travel info DB --config wrangler.jsonc                 # current bookmark
+# 1. Record the CURRENT bookmark first: it is the undo point if the restore is wrong.
+npx wrangler d1 time-travel info DB --config wrangler.jsonc
+
+# 2. Restore to the moment just before the mistake (Unix timestamp or bookmark).
+npx wrangler d1 time-travel restore DB --config wrangler.jsonc --timestamp=<unix seconds>
 npx wrangler d1 time-travel restore DB --config wrangler.jsonc --bookmark=<bookmark>
 ```
 
-This is destructive in place and cancels in-flight queries; it prints the previous
-bookmark as the undo path. See [CI-CD.md → D1 recovery](CI-CD.md#d1-recovery).
+This is destructive in place and cancels in-flight queries: the command prints the
+previous bookmark, which is how you undo it. Two practical notes:
 
-### 6.4 Limitations
+* `time-travel info` is not available to the read-only backup credential (it needs
+  write access), so an operator must use the D1 Write credential or the dashboard.
+  The backup manifests record `bookmark_before`/`bookmark_after` whenever the running
+  credential can read them, which is a hint about *when* a backup corresponds to —
+  useful context, not a substitute for the restore point you choose here.
+* Restoring cancels in-flight queries, so expect a short error window for the
+  application. See [CI-CD.md → D1 recovery](CI-CD.md#d1-recovery).
 
-* A restore replaces data; it is not a merge, and it does not roll back schema.
-* The logical backup is a snapshot of one moment: rows written after it are lost
-  unless Time Travel is used as well.
-* The mirror preserves object bytes, not the `files` table rows; restoring a file
-  that the database no longer references needs a matching database restore or a
-  manual row insert.
-* Backups live in the same Cloudflare account, so account-level loss (or loss of
+### 6.4 Limitations (honest list)
+
+* **Consistency.** A dump is a consistent read of the committed state at one instant,
+  because every table is read in a single request (one transaction). It is not a
+  frozen snapshot of the database while the read runs, and it does not include writes
+  that commit after the read begins: RPO is the read, not an earlier moment. If the
+  single request ever fails and the per-table fallback runs, the manifest says so
+  (`consistency: per-table-reads-not-a-snapshot`), and such a backup can mix commits
+  across tables.
+* **Restores replace, they do not merge.** A restore does not roll back schema, and
+  the dump's `CREATE TABLE` statements mean it applies cleanly only to an empty
+  database (§6.1).
+* **Time Travel is the only in-place, point-in-time mechanism**, and it is bounded by
+  30 days. The logical backups are the independent copy that survives deleting the
+  database or losing Time Travel's window.
+* **The mirror preserves object bytes, not `files` table rows.** Restoring a file the
+  database no longer references needs a matching database restore or a manual row
+  insert.
+* **No replaced object has occurred yet.** The mirror holds exactly one version for
+  each of the 1,329 production keys, so the superseded-version path is unit-tested and
+  the byte-identical recovery path is drilled (§7.4), but a real replacement has not
+  yet had to be recovered. After the first replacement, `r2-recover.mjs
+  --list-duplicates` will show the key.
+* **Both copies live in the same Cloudflare account.** Account-level loss (or loss of
   the credentials) is not covered. Exporting the backup bucket off-account
   periodically is a documented follow-up, not something this phase implements.
+* `PRAGMA integrity_check` and `PRAGMA user_version` are not authorized in D1; the
+  verification uses `quick_check` and `foreign_key_check`, plus per-table row hashes.
+* The backup credentials cannot read Time Travel bookmarks, and the backup token
+  cannot export through Cloudflare's export API (that needs D1 Write). Both are
+  deliberate consequences of keeping the backup job read-only.
+
+### 6.5 Disaster recovery checklist
+
+Print this and keep it with the credentials. Every command is in §6; nothing here is
+destructive except the two steps marked ⚠.
+
+1. **Identify the loss.** Which of: a database, a set of rows, one file object, many
+   objects, the whole account? (Wrong answer here wastes the most time.)
+2. **Freeze the damage.** Stop the writers that caused it (deploy rollback or a
+   maintenance switch). Note the current time in UTC.
+3. **Check the cheap path first.** For recent row damage, `d1 time-travel info` on the
+   affected database and restore to just before the incident (§6.3). Record the
+   previous bookmark from the output before confirming.
+4. **Confirm backups exist and are fresh** (read-only, backup credentials):
+   `node scripts/backup/backup-status.mjs --max-age-hours 30 --json`.
+5. **Fetch and verify the artifact** (§6.1 step 1); the download refuses a manifest
+   mismatch.
+6. **Prove it in isolation** before touching production: local restore, then a
+   temporary D1 database (§6.1 steps 2–3). Compare tables, row counts, row hashes,
+   `quick_check`, and foreign keys.
+7. ⚠ **Apply**: for a lost database, import into a new one and repoint the binding; for
+   selected rows, apply extracted statements; for a file object, `r2-recover.mjs` then
+   the deliberate `r2 object put` (§6.2).
+8. **Verify from the outside**: hit the application, not just SQL — the release
+   verifier (`verify-production.mjs`) plus one real user flow.
+9. **Delete nothing but your temporary resources** (§6.1 teardown), and keep the
+   evidence: manifests, restore reports, and the timings.
+10. **Write down the new baseline**: the incident time, the recovery point used, and
+    the measured duration, so the next drill compares against a real number.
 
 ## 7. Restoration drill results
 
-Two kinds of evidence, clearly separated.
+### 7.1 Remote restore into temporary D1 databases (2026-10-16, Phase 5)
 
-### 7.1 Actual restores performed (real data, isolated target, 2026-10-16)
-
-Both production databases were exported and restored into **isolated local D1
-databases** (`--persist-to` into a private state directory). This is a real
-restore of real production data into a real SQLite database, not a simulation:
-the SQL artifact was loaded by `wrangler d1 execute --file` and then queried.
+The `restore drill` workflow (`mode=execute`, `confirm=RESTORE-DRILL`, `database=both`)
+ran against the stored backups. It created two clearly named temporary databases,
+downloaded and verified both artifacts, restored each into its temporary database
+through the real D1 import path, verified the result, and printed the teardown
+commands. The run was **green**: [38937976131](https://github.com/hmarquardt/aismallbizguru-cflab/actions/runs/38937976131).
 
 | Check | `cflab` | `cflab-analytics` |
 | --- | --- | --- |
-| Artifact size / SHA-256 verified against the manifest | 11,269,440 bytes / `6b5a87aa…` ✔ | 696,164 bytes / `3c287493…` ✔ |
-| Tables restored | 12 of 12 ✔ | 16 of 16 ✔ |
-| Row counts vs manifest | all equal (2,746 rows) ✔ | all equal (1,268 rows) ✔ |
+| Backup restored | 11,269,397 bytes, `20261016T170903Z` | 697,167 bytes, `20261016T170903Z` |
+| Temporary database | `cflab-restore-cflab-20261016T171425Z` | `cflab-restore-cflab-analytics-20261016T171425Z` |
+| Tables | 12 of 12 ✔ | 16 of 16 ✔ |
+| Rows vs manifest | 2,746, all tables equal ✔ | 1,273, all tables equal ✔ |
+| Per-table canonical row hashes vs manifest | 0 mismatches ✔ | 0 mismatches ✔ |
 | `PRAGMA quick_check` | `ok` ✔ | `ok` ✔ |
 | `PRAGMA foreign_key_check` | 0 violations ✔ | 0 violations ✔ |
-| Representative record | newest `files` row byte-identical, including its SHA-256 checksum ✔ | analytics site/event rows present ✔ |
-| Migration ledger | 10 migrations, latest `0010_auth_email_invitations.sql`, identical to production ✔ | — |
-| Restore duration | 10.7 s (plus ~1–2 s wrangler startup) | 4.1 s |
-| Verification duration | 3.8 s | 3.6 s |
+| Representative application row (newest `files` row: id, object key, 61,067 bytes, checksum) | identical to production ✔ | analytics rows present ✔ |
+| Migration ledger and `sqlite_sequence` | 10 migrations, sequence restored ✔ | — |
 
-The `files` total restored (266,972,411 bytes) is identical to the live database,
-which is the strongest available evidence that the export is complete.
+Verification was repeated **independently after the workflow finished** (the same
+queries run by hand, comparing every table's row hash against the stored manifest,
+plus the representative row against live production): 0 mismatched tables in both
+databases.
 
-### 7.2 Not yet performed — needs operator authorization
+**Isolation.** The restored data lived only in the two temporary databases. Every
+command names its target explicitly, and `restore-verify.mjs` refuses production names
+and ids outright (`assertNotProductionTarget`). Production was only ever read — its row
+counts, `files` total, and checksums are unchanged. Both temporary databases were
+deleted after verification (`wrangler d1 delete <temp> --skip-confirmation`), after
+which `wrangler d1 list` showed only `cflab` and `cflab-analytics`.
 
-* **Remote restore into a temporary D1 database.** The workflow
-  (`restore-drill.yml`) and the script support it, and the script refuses
-  production targets, but running it creates a billable D1 database, so it is
-  waiting for the operator. Expected duration: 2–5 minutes for `cflab`.
-* **R2 mirror round-trip.** The mirror needs S3 credentials, which do not exist
-  yet; its logic is covered by tests (content addressing, never-overwrite,
-  corruption detection) but has not touched real objects. A real drill is the
-  first `files` job run after activation, plus `--verify`.
-* **Time Travel restore** was deliberately not exercised: it is destructive
-  against the live database and is documented as an operator action only.
+**Measured duration (practical RTO).**
+
+| Phase | Duration |
+| --- | --- |
+| Whole drill job, both databases, end to end | **2 m 09 s** |
+| Import into a real D1 database (`restore_ms` in the report) | ~10 s per database |
+| Verification including all per-table row hashes (`verify_ms`) | ~15–25 s per database |
+| Isolated local restore (runs on every daily backup) | 8.2 s (`cflab`), ~4 s (analytics) |
+
+Restoring a database into a new D1 database and proving it is a **~2 minute**
+operation at this volume; the dominant costs are checkout, `npm ci`, and the two
+database creations, not the 12 MB of data.
+
+### 7.2 What the drill caught (run `38936259705`, failed)
+
+The first attempt **failed**, and the failure was real:
+
+```
+✘ ERROR {"D1_RESET_DO":true}
+```
+
+The dump inserted tables alphabetically, so `password_reset_tokens` was inserted before
+its parent `users`. The local restore passed because `PRAGMA defer_foreign_keys` held
+the check until the end of the transaction; D1's import path runs statements in
+auto-commit, so the foreign key failed, the import was rejected, and D1 reported it as
+the opaque `D1_RESET_DO`. Reproduced deterministically against a fresh database, then
+bisected with a chunked import through the query API (which reports real errors) down
+to the offending statement:
+
+```
+FOREIGN KEY constraint failed: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_FOREIGNKEY)
+INSERT INTO "password_reset_tokens" (...) VALUES(...)
+```
+
+Fix: order the dump parents-before-children from the live `REFERENCES` clauses, with
+per-table create-then-insert groups (§4), and dump `sqlite_sequence` last. A reference
+cycle is refused rather than emitted as an unorderable file. After the fix the same
+import reported `num_tables: 12` and the drill passed. **A backup that had never been
+restored into a real D1 database had been silently un-restorable.**
+
+### 7.3 Consistency experiment (2026-10-16)
+
+Question: can reading each table with its own `SELECT` produce an inconsistent backup
+while the application writes?
+
+Method: a temporary D1 database (created and deleted by the probe) with two tables and
+a trigger that increments `b.v` whenever `a.v` is incremented **inside the same
+statement**, so every commit leaves `a.v == b.v`. A writer loop committed those updates
+continuously; three read strategies sampled the invariant.
+
+| Read strategy | Samples | Inconsistent | Tear rate |
+| --- | --- | --- | --- |
+| Per-table SELECTs, one request each (the previous implementation) | 100 | **84** | **84.0%** |
+| All tables in one request (the current implementation) | 100 | 0 | **0.0%** |
+| One statement reading both tables | 100 | 0 | 0.0% |
+
+345 writer commits landed during the run, so the writer was genuinely concurrent.
+
+The old per-table read was **not** consistent: 84% of backups taken under write load
+could have mixed commits across tables. Reading every table in a single request is
+consistent because D1 executes the statements of one request in one transaction, and it
+is also ~5× faster (2.5 s versus 14.6 s for 12 tables). The daily backup now does the
+latter and records `consistency: single-request-snapshot` in the manifest, so a future
+change cannot quietly revert it.
+
+Not chosen, with reasons: Cloudflare's **export API** is consistent (its response
+carries `at_bookmark`) but requires **D1 Write**, which would give the backup job write
+access to production — the opposite of the least-privilege design. **Time Travel
+bookmarks** provide point-in-time recovery but no read-at-bookmark path (and no
+`fork`/`copy` subcommand in wrangler 4.135), and the read-only backup credential cannot
+read bookmarks at all. Both remain available to an operator by hand (§6.3).
+
+### 7.4 R2 file recovery (2026-10-16)
+
+Representative production objects were recovered from the mirror through
+`r2-recover.mjs` — the documented path — into an isolated directory, then compared
+byte-for-byte with the current production object.
+
+| Object | Size | Result |
+| --- | --- | --- |
+| smallest object in the bucket | 4 B | byte-identical ✔ |
+| largest object in the bucket | 9,710,000 B | byte-identical ✔ |
+| one object per application prefix (`apps/wildlife-field-recorder`) | 1,126,824 B | byte-identical ✔ |
+| one object per application prefix (`apps/top-hat-ferals`) | 113,279 B | byte-identical ✔ |
+
+Every recovered object's SHA-256 matched both the mirror's content address and the
+production object: 4 recovered, 4 identical, 0 mismatched. Nothing was written to
+production and nothing was deleted from either bucket.
+
+**Replaced-version recovery has not yet been exercised on a real replacement**, because
+none has happened: the mirror holds exactly one version for each of the 1,329
+production keys, and `--list-duplicates` reports 0 keys with history. The path is
+implemented and unit-tested (a key with two versions lists both, the superseded one is
+selectable by `--sha256`, and a key deleted from production still reports every version
+as recoverable), and the drill above exercises the download-and-verify half. The first
+real replacement will appear in `r2-recover.mjs --list-duplicates`.
+
+### 7.5 Earlier local restore evidence (2026-10-16, Phase 4)
+
+Both databases were also restored into **isolated local D1 databases**
+(`--persist-to` into a private state directory) — a real restore of real production
+data into a real SQLite database, repeated on every daily backup.
+
+| Check | `cflab` | `cflab-analytics` |
+| --- | --- | --- |
+| Artifact size / SHA-256 verified against the manifest | 11,269,320 bytes ✔ | 697,095 bytes ✔ |
+| Tables restored | 12 of 12 ✔ | 16 of 16 ✔ |
+| Row counts, `quick_check`, `foreign_key_check`, row hashes | all equal, `ok`, 0 violations ✔ | all equal, `ok`, 0 violations ✔ |
+| `files` total restored | 266,971,818 bytes, identical to the live database ✔ | — |
+
+`Time Travel restore` was deliberately **not** exercised: it is destructive in place
+against a live database and is documented as an operator action only (§6.3).
+
 
 ## 8. Legacy LabBox archives (inventory only — nothing deleted)
 
@@ -479,14 +721,34 @@ CFLAB_BACKUP_BUCKET=cflab-backups R2_ACCESS_KEY_ID=… R2_SECRET_ACCESS_KEY=… 
 
 Implemented, committed, and tested:
 
-* `scripts/backup/{lib,d1-export,restore-verify,upload-backups,download-backup,backup-status,r2-mirror,r2-client,verify-setup}.mjs`
+* `scripts/backup/{lib,d1-export,restore-verify,upload-backups,download-backup,backup-status,r2-mirror,r2-client,r2-recover,verify-setup}.mjs`
 * `.github/workflows/backup.yml` (daily + manual, gated by `CFLAB_BACKUPS_ENABLED`)
 * `.github/workflows/restore-drill.yml` (manual; `mode=prepare` creates nothing,
-  `mode=execute` needs `confirm=RESTORE-DRILL`)
-* `test/backup/*.test.mjs` (29 tests: SigV4 vector, export verification, manifest
-  integrity, freshness, mirror planning/verification, setup-policy evaluation,
-  credential guards, the read-only production client, and the production-target
-  refusal)
+  `mode=execute` needs `confirm=RESTORE-DRILL`, and the evidence is uploaded as a
+  90-day artifact)
+* `test/backup/*.test.mjs` (**46 tests**: SigV4 vector, export verification, manifest
+  integrity, foreign-key dump ordering, sequence restoration, freshness, mirror
+  planning/verification, mirror recovery and superseded-version selection,
+  setup-policy evaluation, credential guards, the read-only production client, and the
+  production-target refusal)
+
+### State after Phase 5 (2026-10-16)
+
+Backups are **active and verified**: the daily workflow runs green, the mirror holds
+all 1,329 production objects, a remote restore of both databases into temporary D1
+databases succeeded and was verified row-by-row, and representative file objects were
+recovered byte-identically (§7). The credentials, activation record, and the one
+outstanding operator action (deleting the temporary provisioning token by hand) are in
+§5.3. Still open, in priority order:
+
+1. **Delete the temporary account token-management credential in the dashboard**
+   (§5.3) — the only outstanding security action.
+2. **Decide on off-account retention** of the backup bucket (§6.4) — the account-level
+   loss case is not covered.
+3. **A later, separate decision about the legacy LabBox archives** (§8).
+4. **Re-run the drill quarterly**, and after any change to the backup or restore code,
+   so "verified" keeps meaning verified.
+
 
 ### Verified 2026-10-16 (Phase 4B)
 
@@ -510,6 +772,12 @@ first attempt lost one rule from each list and the API read-back caught it), and
 
 ### Automation boundaries (established 2026-10-16, with evidence)
 
+**Superseded in part:** this table records what was possible before the `gh` CLI
+credential was installed. Secrets and variables are now written from the command line
+(`gh secret set` / `gh variable set`) and workflows are dispatched with `gh workflow
+run`; token creation through the Cloudflare API became possible with a
+token-management credential that is itself being retired (§5.3).
+
 | Action | Can it be automated? | Evidence |
 | --- | --- | --- |
 | Create the backup bucket, lock rules, lifecycle rules | **Yes — done** | `wrangler r2 bucket create` + `lock set` / `lifecycle set` with the operator's OAuth login |
@@ -525,7 +793,7 @@ GitHub repository settings (§5.3 steps 1–2). Everything else — verification
 first backup, freshness reporting, the mirror, and the drill — is already
 implemented and can be run without touching a dashboard.
 
-### Blockers to activation, in order
+### Blockers to activation, in order (all resolved on 2026-10-16 — kept for the record)
 
 1. **Create `cflab-backups`** with the lock and lifecycle rules in §5.1. This is
    the one prerequisite only the account owner can perform.

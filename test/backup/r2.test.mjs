@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { canonicalQuery, createR2Client, signRequest, uriEncode } from '../../scripts/backup/r2-client.mjs';
 import { mirror, mirrorKeyFor, planMirror, verifyMirror } from '../../scripts/backup/r2-mirror.mjs';
+import { describeRecovery, parseMirrorKey, versionsByKey } from '../../scripts/backup/r2-recover.mjs';
 import { FORBIDDEN_DESTINATIONS, r2FromEnvironment } from '../../scripts/backup/upload-backups.mjs';
 import { sha256Bytes } from '../../scripts/backup/lib.mjs';
 
@@ -195,6 +196,45 @@ test('writes are single-shot so a failed write is never silently retried', async
   const client = createR2Client({ accountId: 'acct', bucket: 'cflab-backups', accessKeyId: 'AK', secretAccessKey: 'SK', fetchImpl, wait: async () => {} });
   await assert.rejects(client.putObject('files/x', 'data'), /HTTP 500/);
   assert.equal(puts, 1, 'the write is attempted once and the run fails, so the next run resumes');
+});
+
+test('a mirror key parses back into the digest and the production key', () => {
+  const digest = sha256Bytes('payload');
+  assert.deepEqual(parseMirrorKey(mirrorKeyFor('apps/x/photo.jpg', digest)), { sha256: digest, key: 'apps/x/photo.jpg' });
+  assert.equal(parseMirrorKey('files/manifests/r2-20261016T000000Z.json'), null, 'manifests are not object versions');
+  assert.equal(parseMirrorKey('d1/cflab/2026-10-16/cflab-x.sql'), null, 'database backups are not mirror objects');
+});
+
+test('recovery lists every version and identifies a superseded one', () => {
+  const older = sha256Bytes('v1');
+  const newer = sha256Bytes('v2');
+  const mirrorObjects = [
+    { key: mirrorKeyFor('note.txt', older), size: 2, lastModified: '2026-10-01T00:00:00.000Z' },
+    { key: mirrorKeyFor('note.txt', newer), size: 2, lastModified: '2026-10-15T00:00:00.000Z' },
+    { key: mirrorKeyFor('other.txt', older), size: 2, lastModified: '2026-10-15T00:00:00.000Z' },
+  ];
+  const grouped = versionsByKey(mirrorObjects);
+  assert.equal(grouped.size, 2);
+  assert.equal(grouped.get('note.txt').length, 2);
+  assert.equal(grouped.get('note.txt')[0].sha256, newer, 'the newest version is listed first');
+
+  // Production now holds v2, so v1 is the version a replacement destroyed.
+  const recovery = describeRecovery({ mirrorObjects, key: 'note.txt', productionDigest: newer });
+  assert.equal(recovery.currentVersionMirrored, true);
+  assert.equal(recovery.supersededVersions.length, 1);
+  assert.equal(recovery.supersededVersions[0].sha256, older);
+
+  // With no digest supplied the comparison is reported as unchecked, never guessed.
+  const unchecked = describeRecovery({ mirrorObjects, key: 'note.txt' });
+  assert.equal(unchecked.currentVersionMirrored, 'not checked');
+  assert.equal(unchecked.productionVersion, 'not checked');
+  assert.deepEqual(unchecked.supersededVersions, []);
+
+  // A key that production no longer holds at all: every version is recoverable.
+  const deleted = describeRecovery({ mirrorObjects, key: 'note.txt', productionDigest: sha256Bytes('deleted-in-production') });
+  assert.equal(deleted.currentVersionMirrored, false, 'nothing in the mirror is the current production version');
+  assert.equal(deleted.mirrorVersions, 2, 'both versions remain recoverable');
+  assert.equal(deleted.supersededVersions.length, 2);
 });
 
 test('mirror verification detects corrupted or missing mirror objects', async () => {

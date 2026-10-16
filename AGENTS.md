@@ -43,13 +43,17 @@ commands are in [DEPLOYMENT.md](docs/DEPLOYMENT.md).
   never be applied outside the pipeline without recording the Time Travel
   bookmark first (see [CI-CD.md → D1 recovery](docs/CI-CD.md#d1-recovery)).
 * **Backups are the last line of defence, and they are verified by restoring.**
-  Both D1 databases are exported daily and restored into an isolated database
-  before anything is uploaded; `cflab-files` is mirrored append-only and
-  content-addressed so a deletion or replacement cannot propagate. Never delete,
-  overwrite, or "tidy" a stored backup, never write backups into `cflab-files`,
-  and never restore into a production database as part of a test. The procedures
-  and the retention policy are in
-  [BACKUP-RESTORE.md](docs/BACKUP-RESTORE.md).
+  Both D1 databases are dumped daily and restored into an isolated database before
+  anything is uploaded; `cflab-files` is mirrored append-only and content-addressed so
+  a deletion or replacement cannot propagate. Never delete, overwrite, or "tidy" a
+  stored backup, never write backups into `cflab-files`, and never restore into a
+  production database as part of a test. Two properties of the dump are load-bearing
+  and must not be "simplified" away: every table is read **inside one request** (one
+  transaction, recorded as `consistency: single-request-snapshot`; per-request reads
+  tore 84% of the time in a controlled experiment), and tables are **created and
+  populated parents-before-children** from the live `REFERENCES` clauses (an
+  alphabetical dump failed every remote D1 restore). The procedures and the retention
+  policy are in [BACKUP-RESTORE.md](docs/BACKUP-RESTORE.md).
 
 ## What an agent must not do
 
@@ -88,6 +92,8 @@ Local development and validation are always safe and never deploy:
 | `node scripts/backup/restore-verify.mjs --manifest <m>` | Restore a backup into an isolated local database and verify it. |
 | `node scripts/backup/backup-status.mjs` | Read-only backup freshness report; fails when a backup is stale. |
 | `node scripts/backup/r2-mirror.mjs --plan` | Plan the append-only file mirror (add `--apply` to copy). Never deletes. |
+| `node scripts/backup/r2-recover.mjs --list-duplicates` | Read-only: which mirrored keys have more than one stored version (i.e. were replaced). |
+| `node scripts/backup/r2-recover.mjs --key <key> --out <dir>` | Recover one file object from the mirror into an isolated directory and verify its digest. Never writes to production. |
 | `node scripts/backup/verify-setup.mjs` | Verify the backup bucket, lock/lifecycle rules, public access, and credentials before activation. |
 | `npm run deploy` | **Refuses.** Prints this policy. Releases come from GitHub Actions. |
 

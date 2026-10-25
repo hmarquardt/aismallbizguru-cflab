@@ -41,10 +41,11 @@ jobs:
       # tests, the offline remote-probe harness, the migration harness, and the
       # release-tooling tests.
       - run: npm run check
-      # Apply both schemas to ephemeral local D1 storage so the migration files
-      # themselves are exercised before any release.
+      # Apply all three schemas to ephemeral local D1 storage so the migration
+      # files themselves are exercised before any release.
       - run: npm run db:migrate
       - run: npm run db:migrate:analytics
+      - run: npm run db:migrate:signals
       # Dry-run bundles for both Workers. Nothing is uploaded.
       - run: npm run build
       - run: npm run build:analytics
@@ -83,9 +84,9 @@ jobs:
           CLOUDFLARE_D1_API_TOKEN: ${{ secrets.CLOUDFLARE_D1_API_TOKEN }}
         run: node scripts/ci/verify-deployment-target.mjs
 
-      # 3. Check pending migrations for both D1 databases and classify each one.
-      # Unsafe or unrecognized migrations stop the release here.
-      - name: Check pending D1 migrations for both databases
+      # 3. Check pending migrations for all three D1 databases and classify each
+      # one. Unsafe or unrecognized migrations stop the release here.
+      - name: Check pending D1 migrations for all three databases
         id: migrations
         env:
           CLOUDFLARE_D1_API_TOKEN: ${{ secrets.CLOUDFLARE_D1_API_TOKEN }}
@@ -93,7 +94,7 @@ jobs:
 
       # 4. Apply only the migrations the gate classified as additive, or that
       # carry an explicit content-matched operator approval.
-      - name: Apply approved, additive D1 migrations
+      - name: Apply approved, additive D1 migrations to all three databases
         id: apply_migrations
         env:
           CLOUDFLARE_D1_API_TOKEN: ${{ secrets.CLOUDFLARE_D1_API_TOKEN }}

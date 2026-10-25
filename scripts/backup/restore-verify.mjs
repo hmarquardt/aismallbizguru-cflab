@@ -24,13 +24,11 @@ import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { DATABASES } from './d1-export.mjs';
+import { readConfig } from '../ci/verify-deployment-target.mjs';
 import { sha256File, validateManifest, verifyArtifactAgainstManifest, wranglerResultSets, wranglerRows, writeJsonFile, canonicalRowHash } from './lib.mjs';
 
 // Restoring over these would be a production incident, not a drill.
-export const PRODUCTION_DATABASES = new Set([
-  'cflab', 'cflab-analytics',
-  'cb2d2eb4-2817-4581-8e50-d69212650adf', '54e8af8e-3345-40e7-88fd-462a688421b5',
-]);
+export const PRODUCTION_DATABASES = new Set(DATABASES.flatMap(database => [database.label, database.databaseId]));
 
 export function assertNotProductionTarget(target) {
   if (PRODUCTION_DATABASES.has(String(target).toLowerCase())) {
@@ -42,6 +40,16 @@ export function databaseFor(label) {
   const database = DATABASES.find(candidate => candidate.label === label);
   if (!database) throw new Error(`unknown database label "${label}"; expected one of ${DATABASES.map(d => d.label).join(', ')}`);
   return database;
+}
+
+export function assertIsolatedRemoteConfig(target, config) {
+  const parsed = readConfig(config);
+  if (parsed.env) throw new Error('a restore config must not declare environment overrides');
+  const selected = (parsed.d1_databases ?? []).filter(binding => [binding.binding, binding.database_name, binding.database_id].includes(target));
+  if (selected.length !== 1) throw new Error('remote restore config must unambiguously declare the temporary target');
+  assertNotProductionTarget(selected[0].database_name);
+  assertNotProductionTarget(selected[0].database_id);
+  if (!selected[0].database_id || !selected[0].database_name) throw new Error('temporary target needs both a database name and id');
 }
 
 function wranglerRun(args, { allowFailure = false } = {}) {
@@ -79,6 +87,11 @@ export function verifyRestored({ target, config, stateDir, manifest, run = wrang
   const extra = tables.filter(table => !expectedTables.includes(table));
   if (missing.length) problems.push(`restored database is missing tables: ${missing.join(', ')}`);
   if (extra.length) problems.push(`restored database has unexpected tables: ${extra.join(', ')}`);
+  if (manifest.schema_hash) {
+    const schema = wranglerRows(query({ target, config, stateDir,
+      sql: "SELECT type, name, sql FROM sqlite_schema WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%' ORDER BY type, name", run }).output);
+    if (canonicalRowHash(schema) !== manifest.schema_hash) problems.push('restored schema definitions do not match the snapshot');
+  }
 
   const shared = expectedTables.filter(table => tables.includes(table));
   const rowCounts = {};
@@ -130,6 +143,7 @@ export async function restoreAndVerify({ manifestPath, workDir = 'restore-drill'
     if (!allowRemoteWrite) throw new Error('restoring into a remote database requires --allow-remote-write');
     assertNotProductionTarget(remoteDatabase);
     if (!remoteConfig) throw new Error('a remote restore needs --remote-config pointing at a config that declares the temporary database');
+    assertIsolatedRemoteConfig(remoteDatabase, remoteConfig);
     target = remoteDatabase;
     config = remoteConfig;
     mode = 'remote';
@@ -147,6 +161,7 @@ export async function restoreAndVerify({ manifestPath, workDir = 'restore-drill'
   const verifyStartedAt = Date.now();
   const verification = verifyRestored({ target, config, stateDir, manifest, run });
   const verifyMs = Date.now() - verifyStartedAt;
+  if (!verification.ok) throw new Error(`restore verification failed:\n- ${verification.problems.join('\n- ')}`);
 
   return {
     database: manifest.database, mode, target, stateDir, sqlPath, manifest,

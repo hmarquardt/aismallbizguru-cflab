@@ -5,7 +5,7 @@
 // pipeline must decide *before* it runs anything whether the pending set is safe
 // to apply without an operator. This gate:
 //
-//   1. lists the pending migrations for both databases with a read-only
+//   1. lists the pending migrations for all three databases with a read-only
 //      `wrangler d1 migrations list --remote`;
 //   2. classifies every pending file by reading its SQL;
 //   3. blocks unless every file is confidently additive, or an explicit approval
@@ -19,7 +19,7 @@
 // It never drops, resets, truncates, seeds, or mutates R2.
 //
 // Usage:
-//   node scripts/ci/migration-gate.mjs [--apply] [--database DB|ANALYTICS|all]
+//   node scripts/ci/migration-gate.mjs [--apply] [--database DB|ANALYTICS|BTC_SIGNALS|all]
 //   node scripts/ci/migration-gate.mjs --print-hash <migration-file>
 
 import { createHash } from 'node:crypto';
@@ -38,6 +38,7 @@ export class GateError extends Error {
 export const DATABASES = [
   { name: 'DB', label: 'cflab (primary)', config: 'wrangler.jsonc', migrationsDir: 'migrations' },
   { name: 'ANALYTICS', label: 'cflab-analytics', config: 'wrangler.analytics.jsonc', migrationsDir: 'migrations-analytics' },
+  { name: 'BTC_SIGNALS', label: 'cflab-bitcoin-signals', config: 'wrangler.jsonc', migrationsDir: 'migrations-bitcoin-signals' },
 ];
 
 export const APPROVALS_PATH = '.github/d1-migration-approvals.json';
@@ -245,7 +246,7 @@ function parseArgs(argv) {
   return options;
 }
 
-const USAGE = 'Usage: node scripts/ci/migration-gate.mjs [--apply] [--database DB|ANALYTICS|all] [--approvals <path>]\n       node scripts/ci/migration-gate.mjs --print-hash <migration-file>';
+const USAGE = 'Usage: node scripts/ci/migration-gate.mjs [--apply] [--database DB|ANALYTICS|BTC_SIGNALS|all] [--approvals <path>]\n       node scripts/ci/migration-gate.mjs --print-hash <migration-file>';
 
 function blockedMessage(database, blocked) {
   const db = DATABASES.find(candidate => candidate.name === database);

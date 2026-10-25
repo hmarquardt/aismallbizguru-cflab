@@ -14,7 +14,7 @@ Two Workers are released together:
 
 | Worker | Config | Production origins | Storage |
 | --- | --- | --- | --- |
-| `cflab` | `wrangler.jsonc` | `cflab.aismallbizguru.com` (Custom Domain), `lab.aismallbizguru.com/*` (zone route) | D1 `cflab` (`DB`), D1 `cflab-analytics` (`ANALYTICS`), R2 `cflab-files` (`FILES`) |
+| `cflab` | `wrangler.jsonc` | `cflab.aismallbizguru.com` (Custom Domain), `lab.aismallbizguru.com/*` (zone route) | D1 `cflab` (`DB`), D1 `cflab-analytics` (`ANALYTICS`), D1 `cflab-bitcoin-signals` (`BTC_SIGNALS`), R2 `cflab-files` (`FILES`), hourly + daily cron for Bitcoin Signals collection |
 | `cflab-analytics` | `wrangler.analytics.jsonc` | `analytics.aismallbizguru.com` (Custom Domain), `lab.`/`cflab.` `/api/analytics/collect*` (zone routes) | D1 `cflab-analytics` (`ANALYTICS`), service binding `CFLAB` → `cflab`/`HumanAuthService`, hourly cron |
 
 Nothing in the workflow provisions infrastructure. Both deploys pass
@@ -47,7 +47,7 @@ automatic production deployment on.
 | Name | Kind | Purpose |
 | --- | --- | --- |
 | `CLOUDFLARE_API_TOKEN` | secret | Publish both Workers (`Workers Scripts: Edit`, `Workers Routes: Edit`; the same account as `wrangler.jsonc`). |
-| `CLOUDFLARE_D1_API_TOKEN` | secret | List and apply D1 migrations on both databases (`D1: Edit`). Kept separate from the deploy token so the migration step cannot change Worker code and vice versa. |
+| `CLOUDFLARE_D1_API_TOKEN` | secret | List and apply D1 migrations on all three databases (`D1: Edit`). Kept separate from the deploy token so the migration step cannot change Worker code and vice versa. |
 | `CLOUDFLARE_DEPLOY_ENABLED` | variable | `false` disables production deployment; `true` enables it. |
 | `CLOUDFLARE_ACCOUNT_ID` | workflow `env` | Public configuration (`b1aa310aa0a1638d72b8b086a21e557c`), identical to `wrangler.jsonc`. Not a secret. |
 
@@ -64,9 +64,11 @@ account, a second Cloudflare token, or a copied local OAuth credential.
    Workers-compatible Vitest suite (real ephemeral D1/R2), dashboard UI tests,
    the offline remote-probe harness, the migration harness, and the release
    tooling tests (`test/ci/*`).
-2. `npm run db:migrate` and `npm run db:migrate:analytics` — both migration sets
-   are applied to ephemeral **local** storage, so a broken migration file fails
-   validation before any release.
+2. `npm run db:migrate`, `npm run db:migrate:analytics`, and
+   `npm run db:migrate:signals` — all three migration sets are applied to ephemeral
+   **local** storage, so a broken migration file fails validation before any
+   release. `test/bitcoin-signals/migrations.test.ts` also proves the three schemas
+   migrate independently.
 3. `npm run build` and `npm run build:analytics` — `wrangler deploy --dry-run`
    bundles for both Workers. Nothing is uploaded.
 4. The validated bundles are uploaded as the `cflab-build` artifact and
@@ -82,21 +84,29 @@ The deploy job follows one fixed order, and stops at the first failure:
 2. **Deployment target and credentials verified** —
    `node scripts/ci/verify-deployment-target.mjs` compares both Wrangler configs
    against the intended production account, Workers, origins, D1 databases, R2
-   bucket, `send_email` binding, rate-limit bindings, service binding, cron
-   trigger, and `AUTH_FROM_EMAIL`; it also requires both tokens, the expected
+   bucket, all three D1 bindings, `send_email` binding, rate-limit bindings,
+   service binding, cron triggers, and `AUTH_FROM_EMAIL`; it also requires both
+   tokens, the expected
    account ID, the released commit SHA, and both validated bundles. These
    expectations are deliberate guards: a release that would drop a binding or
    repoint a database stops here instead of changing production. If a change is
-   intentional, update the expectation in the same reviewed commit.
+   intentional, update the expectation in the same reviewed commit. The
+   `BTC_SIGNALS` check additionally refuses the local placeholder id, so a release
+   cannot run before `cflab-bitcoin-signals` exists (see
+   [BITCOIN-SIGNALS.md](BITCOIN-SIGNALS.md#9-provisioning)).
+   Wrangler configuration is authoritative for the new database ID; the full
+   preflight reads all three actual Cloudflare database identities with the D1
+   credential and fails on a mismatched name or UUID.
 3. **Pending migrations checked** — `node scripts/ci/migration-gate.mjs` lists the
-   pending migrations for **both** D1 databases and classifies every file.
+   pending migrations for **all three** D1 databases and classifies every file.
 4. **Approved, additive migrations applied** —
    `node scripts/ci/migration-gate.mjs --apply` re-lists, re-classifies, applies,
    and then confirms nothing remains pending.
 5. **Primary Worker deployed** — `wrangler deploy --config wrangler.jsonc
    --no-x-provision --tag <sha>`.
 6. **Primary production verified** — health, deployment identity, authentication
-   boundary, public projections, cutover hostname.
+   boundary, public projections, cutover hostname, the Bitcoin Signals dashboard
+   shell, and that its API rejects unauthenticated access.
 7. **Analytics Worker deployed** — `wrangler deploy --config
    wrangler.analytics.jsonc --no-x-provision --tag <sha>`. It is deployed after
    CFLab because its `CFLAB` service binding needs the `HumanAuthService`
@@ -192,7 +202,7 @@ What is checked:
 
 | Service | Checks |
 | --- | --- |
-| `cflab` | `/api/health` is `{"status":"ok","service":"cflab"}`; `/api/version` reports the released revision; `/api/admin/apps` rejects unauthenticated access (401); `/api/apps/wildlife-field-recorder` rejects unauthenticated access and an unregistered machine token (401); the public Top Hat Ferals and Wildlife Safari projections answer 200 with their documented shape; `lab.aismallbizguru.com/api/health` still serves CFLab. |
+| `cflab` | `/api/health` is `{"status":"ok","service":"cflab"}`; `/api/version` reports the released revision; `/api/admin/apps` rejects unauthenticated access (401); `/api/apps/wildlife-field-recorder` rejects unauthenticated access and an unregistered machine token (401); the public Top Hat Ferals and Wildlife Safari projections answer 200 with their documented shape; `lab.aismallbizguru.com/api/health` still serves CFLab; `/bitcoin-signals` serves the dashboard shell with its four sections and no external script; `/api/bitcoin-signals/radar` rejects anonymous callers, machine tokens, and unknown human sessions (401). |
 | `cflab-analytics` | `/api/health` is `{"status":"ok","service":"cflab-analytics"}`; `/api/version` reports the released revision; `/` serves the dashboard HTML; `/api/sites` rejects unauthenticated access (401) and rejects an unknown session **through the `CFLAB` service binding** (401, where 503 would mean the binding is broken); `/collect` and `/api/analytics/collect` answer an unknown Site with 204 and an empty body; the same legacy collect route answers 204 on both `cflab.` and `lab.`, which proves the Analytics Worker owns those zone routes (the legacy CFLab collector answers 404 there). |
 
 Failure categories are distinct, so a release problem is never confused with an
@@ -262,19 +272,21 @@ Do this only after the blocking item below is resolved.
 
 1. Confirm the reconciled state on `main`: `npm run check` passes, and
    `node scripts/ci/verify-deployment-target.mjs --config-only` prints
-   `PASS: 30 deployment-target checks passed`.
+   `PASS: 35 deployment-target checks passed` (verified after the authorized
+   2026-10-25 database creation). Source-use and coverage conditions still apply.
 2. Confirm the repository variable `CLOUDFLARE_DEPLOY_ENABLED` is `false` and both
    secrets exist.
 3. Confirm the release pipeline's `validate` job passes on `main`.
-4. Confirm the recovery mechanism is usable — both databases must answer
-   `npx wrangler d1 time-travel info <DB>` with a bookmark (see
+4. Confirm the recovery mechanism is usable — every provisioned database must
+   answer `npx wrangler d1 time-travel info <DB>` with a bookmark (see
    [D1 recovery](#d1-recovery)).
-5. Confirm the remote migration state is fully applied — both databases must
+5. Confirm the remote migration state is fully applied — all three databases must
    report no pending migrations:
 
    ```sh
    npx wrangler d1 migrations list DB --remote --config wrangler.jsonc
    npx wrangler d1 migrations list ANALYTICS --remote --config wrangler.analytics.jsonc
+   npx wrangler d1 migrations list BTC_SIGNALS --remote --config wrangler.jsonc
    ```
 6. Set `CLOUDFLARE_DEPLOY_ENABLED=true`.
 7. Push a trivial, reviewed commit to `main` (or run the workflow manually on
@@ -421,12 +433,20 @@ than for convenience.
 
 ## Known limitations and drift
 
-* **Backups are implemented but not activated.** The scheduled backup workflow is
-  gated by `CFLAB_BACKUPS_ENABLED` and needs the operator to create the backup
-  bucket and credentials first
-  ([BACKUP-RESTORE.md §5](BACKUP-RESTORE.md#5-credentials-and-cloudflare-setup)).
-  Until then, D1 Time Travel is the only recovery mechanism, and `cflab-files` has
-  no protection against an accidental delete or overwrite.
+* **Bitcoin Signals release authorized (2026-10-25).** The provisioned D1 resource
+  is `7630355d-eae7-4410-aef5-7a0486ddc523` (`BTC_SIGNALS`). The operator authorized
+  committing/pushing the reviewed implementation, additive pipeline migrations and
+  deployment through the unchanged gates. OKX/Kraken funding/basis, Coinbase,
+  mempool.space and CoinGecko treasury are enabled for the accepted private
+  personal-use interpretations. Deribit stays disabled for US residency and email
+  alerts stay off. Production success still requires revision, collection and
+  backup/restore evidence; authorization alone is not verification. See
+  [BITCOIN-SIGNALS-AUDIT.md](BITCOIN-SIGNALS-AUDIT.md).
+* **Backup coverage must extend to the third database.** The existing backup gate
+  was `true` at the 2026-10-25 independent audit. The workflow and freshness report
+  now include Bitcoin Signals; its first production backup and isolated restore
+  remain pending authorized pipeline migration and collection. Existing backups must be
+  preserved ([BACKUP-RESTORE.md](BACKUP-RESTORE.md)).
 * **Source and production are reconciled (2026-10-15).** The email/invitation work
   is committed (`9dad7ba`) and matches the live deployment; `main` is ahead of
   production only by the additive `GET /api/version` route, so the first release
@@ -436,7 +456,7 @@ than for convenience.
   entries; (2) all five server-rendered pages (`/admin/login`, `/admin/users`,
   `/account`, `/forgot-password`, `/reset-password`) are byte-identical to this
   source; (3) an invite-purpose (`cfri_`) token is rejected with the new message;
-  (4) both databases report no pending migrations. The deployed script's `etag`
+  (4) both databases that existed at the time reported no pending migrations. The deployed script's `etag`
   could not be used for byte-level proof: it is not reproducible from a locally
   built bundle even for the unchanged Analytics Worker, so it is not a source
   digest.
@@ -448,6 +468,6 @@ than for convenience.
 * **The legacy CFLab collector still serves `POST /api/analytics/collect`** if the
   Analytics zone routes are removed; the collect-route checks would then report a
   `status` failure rather than silently accepting the fallback.
-* **Deployment stays disabled until an operator enables it.** The pipeline is
-  merged and validated, but `CLOUDFLARE_DEPLOY_ENABLED` must remain `false` until
-  the steps above are completed deliberately.
+* **Preserve the deployment gate as found.** It was `true` at the 2026-10-25 audit.
+  This does not authorize resource creation or bypass any preflight. Provisioning
+  and the remaining audit conditions must be resolved before pushing this release.

@@ -22,6 +22,13 @@ const PRIMARY_ORIGIN = 'https://cflab.aismallbizguru.com';
 const ANALYTICS_ORIGIN = 'https://analytics.aismallbizguru.com';
 const PRIMARY_DATABASE_ID = 'cb2d2eb4-2817-4581-8e50-d69212650adf';
 const ANALYTICS_DATABASE_ID = '54e8af8e-3345-40e7-88fd-462a688421b5';
+// wrangler.jsonc is authoritative for the new database ID. The format,
+// placeholder and distinctness guards below reject an unprovisioned target;
+// the remote migration gate proves the configured database can be reached.
+// The local convention is an all-zero id with a small suffix (…0002 here). Any id
+// in that shape is treated as unprovisioned.
+const PLACEHOLDER_DATABASE_ID = /^0{8}-0{4}-0{4}-0{4}-0{11}[0-9a-f]$/;
+const REQUIRED_CRONS = ['7 * * * *', '41 6 * * *'];
 const FILES_BUCKET = 'cflab-files';
 const REQUIRED_RATE_LIMITS = ['RL_ANALYTICS', 'RL_INVITE', 'RL_LOGIN', 'RL_RECOVERY', 'RL_RESET'];
 
@@ -120,6 +127,21 @@ export function deploymentTargetChecks() {
   truthy('wrangler.jsonc vars.AUTH_FROM_EMAIL', valueAt(primary, 'vars.AUTH_FROM_EMAIL'));
   equals('wrangler.jsonc vars.AUTH_PUBLIC_BASE_URL', valueAt(primary, 'vars.AUTH_PUBLIC_BASE_URL'), PRIMARY_ORIGIN);
   equals('wrangler.jsonc rate limits', rateLimitNames(primary).join(', '), REQUIRED_RATE_LIMITS.join(', '));
+  equals('wrangler.jsonc BTC_SIGNALS database_name', d1Binding(primary, 'BTC_SIGNALS')?.database_name, 'cflab-bitcoin-signals');
+  equals('wrangler.jsonc BTC_SIGNALS migrations_dir', d1Binding(primary, 'BTC_SIGNALS')?.migrations_dir, 'migrations-bitcoin-signals');
+  // A placeholder id is valid JSON and would pass a naive comparison, so it is
+  // rejected explicitly: this is the one gate that keeps an unprovisioned
+  // database out of a release.
+  const signalsId = d1Binding(primary, 'BTC_SIGNALS')?.database_id;
+  equals('wrangler.jsonc D1 bindings are distinct', new Set((primary.d1_databases ?? []).map(database => database.database_id)).size, 3);
+  checks.push({
+    label: 'wrangler.jsonc BTC_SIGNALS database_id is provisioned',
+    actual: typeof signalsId === 'string' && PLACEHOLDER_DATABASE_ID.test(signalsId) ? 'local placeholder' : String(signalsId),
+    expected: 'the id returned by `wrangler d1 create cflab-bitcoin-signals`',
+    ok: typeof signalsId === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(signalsId) && !PLACEHOLDER_DATABASE_ID.test(signalsId),
+  });
+  const crons = (valueAt(primary, 'triggers.crons') ?? []).slice().sort();
+  equals('wrangler.jsonc cron triggers', crons.join(', '), REQUIRED_CRONS.slice().sort().join(', '));
 
   // Analytics Worker: its own routing, storage, service binding, and schedule.
   equals('wrangler.analytics.jsonc name', analytics.name, 'cflab-analytics');
@@ -169,6 +191,26 @@ export function releaseChecks() {
   return checks;
 }
 
+// ID values live in Wrangler configuration. Verify the actual Cloudflare
+// resource names as well, so a valid UUID cannot silently repoint a binding.
+export async function databaseResourceChecks({ fetchImpl = fetch, token = process.env.CLOUDFLARE_D1_API_TOKEN } = {}) {
+  const checks = [];
+  for (const database of readConfig('wrangler.jsonc').d1_databases ?? []) {
+    let actual = 'unreachable';
+    let ok = false;
+    try {
+      const response = await fetchImpl(`https://api.cloudflare.com/client/v4/accounts/${ACCOUNT_ID}/d1/database/${database.database_id}`, {
+        headers: { Authorization: `Bearer ${token}` }, redirect: 'error', signal: AbortSignal.timeout(15_000),
+      });
+      const body = await response.json();
+      actual = body?.result?.name ?? 'unverified';
+      ok = response.ok && body.success === true && body.result.uuid === database.database_id && actual === database.database_name;
+    } catch { /* fail closed without printing credentials or upstream bodies */ }
+    checks.push({ label: `${database.binding} Cloudflare database identity`, actual, expected: database.database_name, ok });
+  }
+  return checks;
+}
+
 function writeSummary(lines) {
   if (!process.env.GITHUB_STEP_SUMMARY) return;
   appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${lines.join('\n')}\n`);
@@ -182,9 +224,10 @@ export function report(checks, log = console.log) {
   return failures;
 }
 
-function main() {
+async function main() {
   const configOnly = process.argv.includes('--config-only');
   const checks = configOnly ? deploymentTargetChecks() : [...deploymentTargetChecks(), ...releaseChecks()];
+  if (!configOnly && checks.every(check => check.ok)) checks.push(...await databaseResourceChecks());
   const failures = report(checks);
   const summary = ['## Deployment target', '', ...failures.map(failure => `- FAILED: ${failure.label} (expected ${JSON.stringify(failure.expected)}, received ${JSON.stringify(failure.actual)})`)];
   if (failures.length) {
@@ -202,5 +245,5 @@ function main() {
 // Importable as a library (the release tooling reads both Wrangler configs):
 // the CLI only runs when this file is the entrypoint.
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  main();
+  await main();
 }

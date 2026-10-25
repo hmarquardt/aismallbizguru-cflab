@@ -2,9 +2,41 @@
 
 ## Deployment identity
 
-The `cflab` Worker is configured for the exact custom domain `cflab.aismallbizguru.com`, with a separate `cflab` D1 database and private `cflab-files` R2 bucket. This is the independent production-equivalent environment. The existing `lab.aismallbizguru.com` service, DNS, and infrastructure stay unchanged. Local Wrangler uses local bindings without custom-domain routes. Application logic has no deployment hostname; health always identifies `service: "cflab"`, and download URLs are relative. A future approved hostname change can keep the same Worker and data bindings after compatibility work is complete. See [deployment instructions](DEPLOYMENT.md).
+The `cflab` Worker is configured for the exact custom domain `cflab.aismallbizguru.com`, with three D1 databases (`cflab` for identity and shared records, `cflab-analytics`, and `cflab-bitcoin-signals`) and a private `cflab-files` R2 bucket. This is the independent production-equivalent environment. The existing `lab.aismallbizguru.com` service, DNS, and infrastructure stay unchanged. Local Wrangler uses local bindings without custom-domain routes. Application logic has no deployment hostname; health always identifies `service: "cflab"`, and download URLs are relative. A future approved hostname change can keep the same Worker and data bindings after compatibility work is complete. See [deployment instructions](DEPLOYMENT.md).
 
 Analytics is a second Worker (`cflab-analytics`, `wrangler.analytics.jsonc`) serving `analytics.aismallbizguru.com` plus the specific `lab.`/`cflab.` collector routes. It uses the shared `cflab-analytics` D1 database, serves its own static dashboard, and validates human sessions through the narrow `HumanAuthService` service binding exported by this Worker. CFLab never calls analytics. See [ANALYTICS.md](ANALYTICS.md).
+
+## Projects, permissions, and storage
+
+Project identity, permissions, and physical data storage are three separate
+concerns:
+
+| Concern | Where it lives |
+| --- | --- |
+| Identity | `apps` row in the primary `cflab` database |
+| Permissions | `users.is_admin` and `project_memberships` in the primary database |
+| Storage | `project_storage` row naming a binding, resolved by the allowlist in `src/projects.ts` |
+
+A project without a registry row uses the primary database, exactly as before, so
+existing projects and Analytics are unchanged. Bitcoin Signals is the first project
+whose data lives elsewhere: its `apps` and `project_storage` rows are in the
+primary database (migration 0011), and everything it measures is in
+`cflab-bitcoin-signals` via the `BTC_SIGNALS` binding.
+
+The binding is never taken from a request. `src/projects.ts` is the only place
+that maps a backend to a live `D1Database`, with an explicit `switch`, and an
+unrecognized registry row is reported as unavailable rather than guessed. The
+administration API exposes the backend label and a reachability probe; it exposes
+no table browser and accepts no SQL.
+
+Bitcoin Signals adds two cron triggers to this Worker: hourly market/network
+collection at `:07` and daily collection/alert evaluation at `06:41` UTC. A fixed
+server-side permission policy in `src/bitcoin-signals/policy.ts` gates both collection
+and reporting of retained measurements. Only Coinbase spot/internal research and
+mempool.space statistics are currently enabled; the daily handler skips data
+collection while no daily provider is cleared. Both handlers run in the Worker,
+so collection never depends on a browser. See
+[BITCOIN-SIGNALS.md](BITCOIN-SIGNALS.md).
 
 ## Request flow
 
@@ -26,6 +58,14 @@ Structured logs contain only event name, method, status, and duration. Unexpecte
 - `project_memberships`: `(user_id, app_id)` primary key with `read`/`write`; `(app_id, user_id)` supports per-project lookups. Cascades with users and apps.
 - `sessions`: unique SHA-256 token hash, expiry, last-seen, revocation; `(user_id, id)` and expiry indexes.
 - `password_reset_tokens`: unique SHA-256 token hash, expiry, used timestamp; `(user_id, id)` and expiry indexes. Expired rows are ignored by queries and can be removed by operator maintenance.
+
+`cflab-bitcoin-signals` (`BTC_SIGNALS`) keeps research data separate from identity:
+
+- `bs_sources`: the named, documented source for every measurement (cadence, tier, definition).
+- `bs_collection_runs`, `bs_source_runs`, `bs_collection_locks`: collection history, per-source outcomes, and the atomic lease that prevents overlapping runs.
+- `bs_observations`: append-only measurements keyed by `(source_id, series, venue, observed_at, revision)`; unit, definition, tier, retrieval time, run id, evidence URL, and metadata travel with each value.
+- `bs_evidence`, `bs_hypotheses`, `bs_evidence_hypotheses`: the sourced timeline, the six research hypotheses, and their evidence links with human review state.
+- `bs_alerts`, `bs_alert_deliveries`, `bs_settings`, `bs_backup_checks`: deterministic alerts, deduplicated delivery history, operator configuration (email off by default), and attested backup verification.
 
 Resources are implicit namespaces. A resource catalog adds no useful behavior until schemas or policies need enforcement. Configuration JSON is intentionally small; JSON requests are limited to 64 KiB. Only `limit`, `after`, and optional exact `status` are record query parameters. Limits are 1–100 (default 50). UUID ordering is stable but **not chronological**. Lists return one extra row internally to determine `next_cursor`, avoiding counts and offsets. Concurrent inserts earlier than a cursor are seen on the next full traversal; pagination is not a snapshot.
 

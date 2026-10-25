@@ -33,6 +33,12 @@
     "database_name": "cflab-analytics",
     "database_id": "00000000-0000-0000-0000-000000000001",
     "migrations_dir": "migrations-analytics"
+  }, {
+    "binding": "BTC_SIGNALS",
+    "database_name": "cflab-bitcoin-signals",
+    "database_id": "00000000-0000-0000-0000-000000000002",
+    "migrations_dir": "migrations-bitcoin-signals"
   }],
-  "r2_buckets": [{ "binding": "FILES", "bucket_name": "cflab-files" }]
+  "r2_buckets": [{ "binding": "FILES", "bucket_name": "cflab-files" }],
+  "triggers": { "crons": ["7 * * * *", "41 6 * * *"] }
 }

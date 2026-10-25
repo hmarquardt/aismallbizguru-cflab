@@ -115,6 +115,31 @@ function primaryChecks(revision, origins) {
       name: 'cutover hostname serves CFLab', url: `${origins.cutover}/api/health`, status: 200,
       verify: jsonIdentity('cflab', undefined),
     },
+    // Bitcoin Signals: the dashboard shell is public HTML with no data, and its API
+    // requires a human session. Neither probe reads or writes project data.
+    {
+      name: 'Bitcoin Signals dashboard shell', url: `${origins.primary}/bitcoin-signals`, status: 200,
+      contentType: 'text/html',
+      verify: ({ text, name }) => {
+        for (const section of ['panel-radar', 'panel-arbitrage', 'panel-evidence', 'panel-settings']) {
+          assert(text.includes(section), 'body', `${name}: the dashboard shell is missing ${section}`);
+        }
+      },
+    },
+    {
+      name: 'Bitcoin Signals API rejects unauthenticated access',
+      url: `${origins.primary}/api/bitcoin-signals/radar`, status: 401,
+    },
+    {
+      name: 'Bitcoin Signals API rejects a machine token',
+      url: `${origins.primary}/api/bitcoin-signals/radar`, status: 401,
+      headers: { Authorization: `Bearer ${UNKNOWN_MACHINE_TOKEN}` },
+    },
+    {
+      name: 'Bitcoin Signals API rejects an unknown human session',
+      url: `${origins.primary}/api/bitcoin-signals/radar`, status: 401,
+      headers: { Authorization: `Bearer ${UNKNOWN_SESSION_TOKEN}` },
+    },
   ];
 }
 

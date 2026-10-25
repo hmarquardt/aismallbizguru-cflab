@@ -151,7 +151,7 @@ function plainShell(title: string, content: string, script: string): string {
   return '<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">' + FAVICON + '<title>' + title + ' - CFLab</title><style>' + STYLE + '</style></head><body class="auth-page"><div class="auth-wrap"><main class="auth-card"><div class="brand-block"><span class="brand-mark">CFLab</span><span class="brand-sub">AI Small Biz Guru</span></div><h1>' + title + '</h1>' + content + '</main></div><script>' + API_JS + script + '</script></body></html>';
 }
 function appShell(title: string, lede: string, content: string, script: string): string {
-  return '<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">' + FAVICON + '<title>' + title + ' - CFLab</title><style>' + STYLE + '</style></head><body><header class="app-header"><div class="app-header-inner"><a class="brand" href="/account">CFLab</a><nav class="nav" aria-label="Account"><a id="nav-admin" href="/admin/users" hidden>Admin users</a><a href="/account">Account</a><button id="logout" class="btn btn-secondary btn-small" type="button">Log out</button></nav></div></header><main class="container"><div class="page-head"><h1>' + title + '</h1><p class="lede">' + lede + '</p></div>' + content + '</main><script>' + API_JS + script + '</script></body></html>';
+  return '<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">' + FAVICON + '<title>' + title + ' - CFLab</title><style>' + STYLE + '</style></head><body><header class="app-header"><div class="app-header-inner"><a class="brand" href="/account">CFLab</a><nav class="nav" aria-label="Account"><a id="nav-admin" href="/admin/users" hidden>Admin users</a><a href="/bitcoin-signals">Bitcoin Signals</a><a href="/account">Account</a><button id="logout" class="btn btn-secondary btn-small" type="button">Log out</button></nav></div></header><main class="container"><div class="page-head"><h1>' + title + '</h1><p class="lede">' + lede + '</p></div>' + content + '</main><script>' + API_JS + script + '</script></body></html>';
 }
 
 export function loginPage(): string {
@@ -301,8 +301,50 @@ export function usersPage(): string {
 <section class="panel">
   <div class="panel-head"><h2>Users</h2><p id="me">Loading...</p></div>
   <div id="users" class="table-wrap"><p class="muted">Loading...</p></div>
+</section>
+<section class="panel">
+  <div class="panel-head"><h2>Projects and storage</h2><p>Identity and permissions live in the primary database. Project data lives in the storage backend shown, resolved by a server-side allowlist.</p></div>
+  <div id="projects" class="table-wrap"><p class="muted">Loading...</p></div>
+  <div id="signals-health" class="meta-grid" style="margin-top:16px"></div>
 </section>`, `
 var appsCache=[];
+function renderProjects(projects){
+  var host=document.getElementById('projects');
+  if(!projects.length){host.innerHTML='<p class="muted">No projects registered.</p>';return}
+  var rows=projects.map(function(p){
+    var storage='<span class="chip">'+esc(p.storage.label)+' <span class="badge">'+esc(p.storage.binding)+'</span></span>';
+    var link=p.dashboard?'<a href="'+esc(p.dashboard)+'">Open dashboard</a>':'<span class="muted">n/a</span>';
+    return '<tr><td data-label="Project"><div class="user-email">'+esc(p.name)+'</div><div class="hint">'+esc(p.id)+'</div></td>'
+      +'<td data-label="Storage">'+storage+'<div class="hint">'+esc(p.storage.backend)+' &middot; '+esc(p.storage.migrations_dir)+'</div></td>'
+      +'<td data-label="Dashboard">'+link+'</td></tr>';
+  }).join('');
+  host.innerHTML='<table class="table"><thead><tr><th scope="col">Project</th><th scope="col">Storage</th><th scope="col">Dashboard</th></tr></thead><tbody>'+rows+'</tbody></table>';
+}
+function renderSignalsHealth(status){
+  var host=document.getElementById('signals-health');
+  if(!status||!status.project||!status.data){host.innerHTML='<p class="muted">Health is not available for this project.</p>';return}
+  var storage=status.project.storage||{};
+  var collection=status.collection||{};
+  var last=collection.last_runs&&collection.last_runs.length?collection.last_runs[0]:null;
+  var backup=status.backup||{};
+  var items=[
+    ['Storage', (storage.reachable?'<span class="badge badge-active">reachable</span>':'<span class="badge badge-inactive">unreachable</span>')+' <span class="hint">'+esc(storage.binding||'')+'</span>'],
+    ['Last collection', last?esc(last.job+' '+last.status)+' <span class="hint">'+esc(last.started_at||'')+'</span>':'<span class="muted">no run yet</span>'],
+    ['Source freshness', collection.stale_sources?'<span class="badge badge-inactive">'+collection.stale_sources+' stale</span>':'<span class="badge badge-active">all fresh</span>'],
+    ['Observations', esc(String(status.data.observations))+' <span class="hint">'+esc(status.data.last_observation_at||'')+'</span>'],
+    ['Open alerts', esc(String(status.data.alerts_open))],
+    ['Backup', backup.recorded?(backup.ok?'<span class="badge badge-active">verified fresh</span>':'<span class="badge badge-inactive">stale or missing</span>'):'<span class="badge badge-inactive">not recorded</span>']
+  ];
+  host.innerHTML=items.map(function(item){return '<div class="meta-item"><div class="meta-label">'+esc(item[0])+'</div><div class="meta-value">'+item[1]+'</div></div>'}).join('');
+}
+function loadProjects(){
+  api('/api/admin/projects').then(function(data){renderProjects(data.projects||[])},function(err){
+    document.getElementById('projects').innerHTML='<p class="muted">Could not load projects: '+esc(err.message)+'</p>';
+  });
+  api('/api/admin/projects/bitcoin-signals/status').then(renderSignalsHealth,function(err){
+    document.getElementById('signals-health').innerHTML='<p class="muted">Bitcoin Signals health unavailable: '+esc(err.message)+'</p>';
+  });
+}
 function appName(id){for(var i=0;i<appsCache.length;i++){if(appsCache[i].id===id)return appsCache[i].name||formatId(id)}return formatId(id)}
 function inviteBadge(u){
   var i=u.invite||{status:'none'};
@@ -363,5 +405,6 @@ api('/api/auth/me').then(function(data){
   initNav(data.user);wireLogout();
   document.getElementById('me').textContent='Signed in as '+data.user.email;
   load();
+  loadProjects();
 },function(){setSession(null);location.href='/admin/login'});`);
 }

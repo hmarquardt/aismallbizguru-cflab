@@ -167,6 +167,14 @@ Administration requires an active human session whose user has `is_admin = true`
 | DELETE `/apps/:app/tokens/:id` | Revoke (idempotent for an existing token); 204 |
 | PUT `/apps/:app/proxy-sources/:source` | `{active?,config}` → create/replace source; 200 |
 | GET `/apps/:app/proxy-sources` | `{sources:[...],next_cursor}`; optional `after` slug, 100 per page |
+| GET `/projects` | `{projects:[{id,name,active,dashboard,storage:{backend,binding,label,migrations_dir}}]}`; every registered project and its physical storage backend |
+| GET `/projects/:app/status` | Full health for Bitcoin Signals (storage, collection, source freshness, alerts, backup); for any other project only the storage summary. 404 for an unknown app |
+
+`GET /apps` also reports each app's `storage` backend (resolved from the
+`project_storage` registry through the allowlist in `src/projects.ts`) and a
+`dashboard` path for projects that have one. `storage` is `{backend,binding,label}`;
+unknown registry rows are reported as `unknown` rather than resolved. Project health
+never exposes table names, rows, or SQL.
 
 App IDs cannot be renamed. Inactive apps can still be administered. `origins` and `config` are replaced as whole values when supplied; omitted fields are unchanged. Maximum 32 origins, exact serialized HTTP(S) origins without trailing slash/path. HTTP is allowed only for loopback. No app deletion is provided.
 

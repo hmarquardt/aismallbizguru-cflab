@@ -21,9 +21,9 @@ on:
         required: false
         default: 'no'
       database:
-        description: 'Which backup to drill: cflab, cflab-analytics, or both'
+        description: 'Which backup to drill: cflab, cflab-analytics, cflab-bitcoin-signals, or all (both = the first two)'
         required: true
-        default: 'both'
+        default: 'all'
       stamp:
         description: 'Optional backup stamp (YYYYMMDDTHHMMSSZ); empty means the newest'
         required: false
@@ -61,8 +61,9 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p drill
-          for database in cflab cflab-analytics; do
-            if [ "${{ inputs.database }}" != 'both' ] && [ "${{ inputs.database }}" != "$database" ]; then continue; fi
+          for database in cflab cflab-analytics cflab-bitcoin-signals; do
+            if [ "${{ inputs.database }}" != 'all' ] && [ "${{ inputs.database }}" != 'both' ] && [ "${{ inputs.database }}" != "$database" ]; then continue; fi
+            if [ "${{ inputs.database }}" = 'both' ] && [ "$database" = 'cflab-bitcoin-signals' ]; then continue; fi
             if [ -n "${{ inputs.stamp }}" ]; then
               node scripts/backup/download-backup.mjs --database "$database" --out drill --stamp "${{ inputs.stamp }}"
             else
@@ -96,6 +97,11 @@ jobs:
             npx wrangler d1 create "$temp" --config wrangler.jsonc > "drill/${database}-create.log" 2>&1 || { cat "drill/${database}-create.log"; exit 1; }
             id=$(grep -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' "drill/${database}-create.log" | head -1)
             [ -n "$id" ] || { echo "could not read the new database id from drill/${database}-create.log"; exit 1; }
+            case "$database" in
+              cflab-analytics) migrations_dir='migrations-analytics' ;;
+              cflab-bitcoin-signals) migrations_dir='migrations-bitcoin-signals' ;;
+              *) migrations_dir='migrations' ;;
+            esac
             node -e "
               const fs = require('fs');
               fs.writeFileSync('drill/${database}.config.json', JSON.stringify({
@@ -103,7 +109,7 @@ jobs:
                 main: 'src/index.ts',
                 compatibility_date: '2026-09-18',
                 account_id: process.env.CLOUDFLARE_ACCOUNT_ID,
-                d1_databases: [{ binding: 'DB', database_name: '${temp}', database_id: '${id}', migrations_dir: 'migrations' }],
+                d1_databases: [{ binding: 'DB', database_name: '${temp}', database_id: '${id}', migrations_dir: '${migrations_dir}' }],
               }, null, 2) + '\n');
             "
             node scripts/backup/restore-verify.mjs \

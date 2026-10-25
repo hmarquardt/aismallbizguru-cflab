@@ -179,7 +179,7 @@ test('a missing bookmark is reported as unknown rather than guessed', () => {
 // Regression guard: every committed migration must stay additive, or carry an
 // explicit content-matched approval. An accidental DELETE/DROP/UPDATE added to a
 // migration file fails here before it can reach the gate.
-for (const [directory, database] of [['migrations', 'DB'], ['migrations-analytics', 'ANALYTICS']]) {
+for (const [directory, database] of [['migrations', 'DB'], ['migrations-analytics', 'ANALYTICS'], ['migrations-bitcoin-signals', 'BTC_SIGNALS']]) {
   for (const file of readdirSync(directory).sort()) {
     if (!file.endsWith('.sql')) continue;
     test(`committed migration ${directory}/${file} is additive or explicitly approved`, () => {

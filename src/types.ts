@@ -25,9 +25,11 @@ export interface RateLimitBinding {
 export interface Bindings {
   DB: D1Database;
   ANALYTICS: D1Database;
+  BTC_SIGNALS: D1Database;
   FILES: R2Bucket;
   PROXY_ALLOWED_HOSTS: string;
   PROXY_SECRETS?: string;
+  DEPLOY_REVISION?: string;
   EMAIL?: EmailBinding;
   RL_LOGIN?: RateLimitBinding;
   RL_RECOVERY?: RateLimitBinding;
@@ -59,4 +61,4 @@ export interface Membership {
   app_id: string; access: 'read' | 'write';
 }
 export type Scope = 'records:read' | 'records:write' | 'files:read' | 'files:write' | 'proxy:use';
-export type ContextEnv = { Bindings: Bindings; Variables: { app: AppRow; scopes: Scope[]; user?: HumanUser } };
+export type ContextEnv = { Bindings: Bindings; Variables: { app: AppRow; scopes: Scope[]; user?: HumanUser; projectAccess?: 'read' | 'write' } };

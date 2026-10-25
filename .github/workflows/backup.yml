@@ -1,6 +1,6 @@
 name: production backups
 
-# Scheduled, credential-gated backup of both D1 databases and the production file
+# Scheduled, credential-gated backup of all three D1 databases and the production file
 # bucket. Nothing here deploys, migrates, or writes to production: the D1 job only
 # reads (export + read-only introspection) and the R2 job only reads production
 # objects. All writes go to the dedicated backup bucket.
@@ -40,7 +40,7 @@ jobs:
       - run: npm ci
 
       # 1. Read the live schema and row counts, then export each database.
-      - name: Export both databases
+      - name: Export all three databases
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CFLAB_BACKUP_D1_TOKEN }}
         run: node scripts/backup/d1-export.mjs --out backups
@@ -66,7 +66,7 @@ jobs:
           R2_SECRET_ACCESS_KEY: ${{ secrets.CFLAB_BACKUP_R2_SECRET_ACCESS_KEY }}
         run: node scripts/backup/upload-backups.mjs --dir backups --report backups/upload-report.json
 
-      # 4. Fail the run when either database has no backup inside the freshness
+      # 4. Fail the run when any database has no backup inside the freshness
       # window, so a silent backup outage becomes a red workflow.
       - name: Report backup freshness
         env:

@@ -1,17 +1,22 @@
 # Backup, retention, and recovery
 
-CFLab's persistent data is two D1 databases (`cflab`, `cflab-analytics`) and one
-private R2 bucket (`cflab-files`). This document is the inventory, the design, the
+CFLab's storage configuration covers three D1 databases (`cflab`, `cflab-analytics`,
+and the provisioned, not-yet-migrated `cflab-bitcoin-signals`) and one private R2 bucket (`cflab-files`). This document is the inventory, the design, the
 retention policy, the credential setup, and the recovery procedures. The release
 runbook is [CI-CD.md](CI-CD.md); the policy agents must follow is
 [AGENTS.md](../AGENTS.md).
 
 **Principle: a backup is not operational until a restore has been demonstrated.**
-Every scheduled run therefore restores both exports into isolated databases and
-compares them with their manifests *before* uploading anything
-(`scripts/backup/restore-verify.mjs`).
+Every scheduled run therefore restores each export into an isolated database and
+compares it with its manifest *before* uploading anything
+(`scripts/backup/restore-verify.mjs`). The third database gets the same treatment
+as the first two: the export, manifest, freshness check, isolated restore, and
+drill all cover the third database. Export and restore use `DATABASES` in
+`scripts/backup/d1-export.mjs`; the freshness report and drill workflow explicitly
+list the same three names. Database IDs and restore protection derive from the
+production Wrangler configuration.
 
-## 1. Inventory (verified 2026-10-16)
+## 1. Inventory (primary/Analytics verified 2026-10-16; Signals provisioned 2026-10-25)
 
 Verified facts were read from the live account with read-only commands
 (`wrangler d1 info`, `wrangler d1 execute … SELECT`, `wrangler r2 bucket info`,
@@ -23,10 +28,22 @@ Verified facts were read from the live account with read-only commands
 | --- | --- | --- | --- | --- | --- |
 | `cflab` (`DB`) | `cb2d2eb4-2817-4581-8e50-d69212650adf` | 12 MB | 12 | 2,746 (4 apps, 1,336 records, 1,325 files, 2 users, 16 sessions, 10 migrations, 44 safari projection rows) | 2026-09-18 |
 | `cflab-analytics` (`ANALYTICS`) | `54e8af8e-3345-40e7-88fd-462a688421b5` | 692 kB | 16 | 1,268 (387 analytics events, 297 pageviews, 131 sessions, 53 visitors, 3 sites, plus daily aggregates) | 2026-09-18 |
+| `cflab-bitcoin-signals` (`BTC_SIGNALS`) | `7630355d-eae7-4410-aef5-7a0486ddc523` | 12,288 bytes | **0: production migration pending** | 0 | 2026-10-25 20:13:12 UTC (authorized creation) |
 
 Export size measured on 2026-10-16: `cflab` 11,269,440 bytes, `cflab-analytics`
-696,164 bytes. Both databases are in `ENAM`, storage version `production` (Time
-Travel supported; the legacy snapshot API does not apply).
+696,164 bytes. Both are in `ENAM`, storage version `production` (Time Travel
+supported; the legacy snapshot API does not apply). The third database is included
+in the tooling now, and its first verified export happens on the first backup run
+after provisioning (`docs/BITCOIN-SIGNALS.md#9-provisioning`). The read-only freshness check on 2026-10-25 reports its backup as `missing`
+while the first two databases have fresh backups. The new database has zero tables
+and cannot yet supply a meaningful schema/data backup. The existing backup
+gate was already `true` at the 2026-10-25 audit and must remain as found; migrate the third database through the authorized pipeline before relying on
+its backup workflow coverage, then verify the first full backup/restore.
+
+The independent audit also made snapshot export fail closed when the single
+request cannot be read, added schema-definition hashes to new manifests, made a
+failed restore verification fail the CLI, and checked the actual database ID behind
+a remote restore alias. No production data or stored backup was modified.
 
 ### R2 buckets
 
@@ -44,7 +61,7 @@ discrepancy, recorded here rather than changed.
 
 ### Existing recovery capability (before this phase)
 
-* **Time Travel** was available on both databases and is the only point-in-time
+* **Time Travel** was available on every existing database and is the only point-in-time
   mechanism; no independent copy existed.
 * **No scheduled backup existed.** `wrangler d1 export` was used manually during
   the migration (`.migration/snapshots`, `migration-reports/`) and never retained
@@ -99,7 +116,7 @@ created by this phase.
 | --- | --- | --- |
 | Accidental row change or deletion | minutes (Time Travel, 30 days) | < 15 min |
 | Bad migration | to just before the migration (record the bookmark first, §6.3) | < 15 min |
-| Database corruption or loss | ≤ 24 h (daily logical backup) | **measured: 2 m 14 s** to restore both databases into new D1 databases and verify them (§7.1) |
+| Database corruption or loss | ≤ 24 h (daily logical backup) | **measured: 2 m 14 s** to restore the two original databases into new D1 databases and verify them (§7.1); the third database follows the same isolated procedure |
 | Accidental object deletion or replacement | ≤ 24 h (mirror run), any earlier version preserved | seconds to recover one object from the mirror (§7.4) |
 | Full loss of the Cloudflare account | ≤ 24 h, and only if the backup bucket is exported off-account | hours — out of scope, documented as a limitation (§6.4) |
 
@@ -135,7 +152,7 @@ Two properties matter here:
 is gated by the repository variable `CFLAB_BACKUPS_ENABLED == 'true'`:
 
 1. `d1-export.mjs` — read-only introspection, then a **read-only logical dump** of
-   both databases: the schema from `sqlite_schema`, every row of every table, and
+   all three databases: the schema from `sqlite_schema`, every row of every table, and
    `sqlite_sequence`, all through `SELECT`, so the backup credential only ever needs
    **D1 Read**. Two properties make the dump restorable and consistent:
    * **One request, one transaction.** Every table is read inside a single request.
@@ -281,10 +298,12 @@ Done, in this order:
 3. **`verify-setup.mjs --probe-write` → `PASS`**: bucket present and private, both
    30-day locks, both lifecycle rules (90/400 days), production read, backup read,
    separate credential pairs, and the controlled write probe.
-4. **First full backup and mirror**: both databases dumped, restored, and verified
-   by row hash, then uploaded; all 1,329 production objects (254.9 MB) mirrored and
-   re-hashed end to end. `backup-status.mjs --max-age-hours 30` reports both
-   databases fresh.
+4. **First full backup and mirror**: both databases that existed then were dumped,
+   restored, and verified by row hash, then uploaded; all 1,329 production objects
+   (254.9 MB) mirrored and re-hashed end to end. `backup-status.mjs
+   --max-age-hours 30` reported both fresh. The report now covers all three
+   databases, so it stays red until `cflab-bitcoin-signals` is migrated and
+   independently backed up and restored.
 5. **`CFLAB_BACKUPS_ENABLED=true`**, then the `production backups` workflow was
    dispatched and completed **green** (run
    [38928586452](https://github.com/hmarquardt/aismallbizguru-cflab/actions/runs/38928586452)),
@@ -342,8 +361,11 @@ account, follow §5.1 first.
    green, so the daily 03:37 UTC run starts.
 6. **Drill.** Run `restore drill` with `mode=prepare` first (downloads, verifies,
    and restores the newest backup locally, creating nothing), then `mode=execute`
-   with `confirm=RESTORE-DRILL`, verify the result, and tear the temporary
-   databases down with the command the run prints. Repeat quarterly.
+   with `confirm=RESTORE-DRILL` and `database=all` to restore **all three**
+   databases into temporary databases, verify the result, and tear them down with
+   the commands the run prints. Repeat quarterly, and once immediately after
+   `cflab-bitcoin-signals` has been migrated through the pipeline so it has its own
+   demonstrated restore before the schedule depends on it.
 
 ## 6. Recovery procedures
 
@@ -562,7 +584,8 @@ which `wrangler d1 list` showed only `cflab` and `cflab-analytics`.
 
 | Phase | Duration |
 | --- | --- |
-| Whole drill job, both databases, end to end (download, both local restores, both temporary databases, both remote restores, both verifications, evidence upload) | **2 m 14 s** |
+| Whole drill job, both databases that existed on 2026-10-16, end to end (download, both local restores, both temporary databases, both remote restores, both verifications, evidence upload) | **2 m 14 s** |
+| The same drill with `database=all` now covers three databases; the added restore is proportionally small and should be re-measured on the first three-database drill | to be measured |
 | Import into a real D1 database (`restore_ms` in the report) | ~10 s per database |
 | Verification including all per-table row hashes (`verify_ms`) | ~15–25 s per database |
 | Isolated local restore (runs on every daily backup) | 8.2 s (`cflab`), ~4 s (analytics) |
@@ -703,7 +726,7 @@ separate, deliberate task, not a side effect of this phase.
 
 | Signal | Where | Failure mode |
 | --- | --- | --- |
-| Backup freshness (≤ 30 h) | `backup-status.mjs` in the daily workflow | red workflow run; the report names the stale database and its age |
+| Backup freshness (≤ 30 h) | `backup-status.mjs` in the daily workflow, covering `cflab`, `cflab-analytics`, and `cflab-bitcoin-signals` | red workflow run; the report names the stale or missing database and its age |
 | Restore proof on every run | `restore-verify.mjs` step | the run stops before uploading, so a broken export never becomes a stored backup |
 | Integrity of stored artifacts | manifest SHA-256 checked on download and on verification | `download-backup.mjs` refuses a mismatch |
 | Mirror integrity | `--verify --sample 25` each run, `--verify` for everything on demand | red workflow run listing the offending keys |
@@ -819,3 +842,23 @@ accidental delete or overwrite.
 
 
 
+
+## CoinGecko conditional retention exception
+
+On 2026-10-25 the operator authorized restoring CoinGecko treasury research with
+the narrow exception recorded in [AGENTS.md](../AGENTS.md). Normal backups remain
+append-only and verified; no deletion capability is added to the backup client.
+If API access is terminated and deletion is required, disable the provider and
+inventory all retained CoinGecko copies, including observations, derived outputs,
+exports, local drills and D1 backup artifacts. Prepare verified clean replacements
+that preserve every unrelated row and table before requesting the operator's
+specific approval for production remediation. Manifests/attestations for replaced
+artifacts must be corrected, not left reporting missing originals as restorable.
+
+The current 30-day R2 locks are configurable, rather than an irrevocable legal hold;
+[Cloudflare documents removing/updating lock rules](https://developers.cloudflare.com/r2/buckets/bucket-locks/).
+Do not remove a broad protection rule as a shortcut. A remediation plan must keep
+protection for unrelated objects and restore the normal protection/freshness
+checks after the scoped operation. No lock, bucket object, credential, production
+row or existing backup was modified to enable collection in the working tree.
+Paid CoinGecko access alone would not waive its termination-deletion condition.

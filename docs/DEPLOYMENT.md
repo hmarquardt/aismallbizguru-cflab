@@ -7,6 +7,8 @@ Target: **https://cflab.aismallbizguru.com**. This is CFLab's lasting production
 | Worker | `cflab`, entrypoint `src/index.ts` |
 | Custom Domain | `cflab.aismallbizguru.com` only |
 | D1 binding `DB` | dedicated database `cflab` |
+| D1 binding `ANALYTICS` | dedicated database `cflab-analytics` |
+| D1 binding `BTC_SIGNALS` | dedicated database `cflab-bitcoin-signals` |
 | R2 binding `FILES` | dedicated private bucket `cflab-files` |
 | Health | `GET /api/health` → `{"status":"ok","service":"cflab"}` |
 
@@ -64,9 +66,20 @@ Only when the verified names are unused:
 ```sh
 npx wrangler d1 create cflab --config wrangler.jsonc
 npx wrangler r2 bucket create cflab-files --config wrangler.jsonc
+# Bitcoin Signals keeps its data in a third database of its own.
+npx wrangler d1 create cflab-bitcoin-signals --config wrangler.jsonc
 ```
 
 Record the new D1 ID. Replace **only** the all-zero `database_id` in `wrangler.jsonc` with that ID, retaining `binding: "DB"`, `database_name: "cflab"`, and `migrations_dir: "migrations"`. Keep the R2 binding `FILES` and bucket name `cflab-files`. Leave `wrangler.local.jsonc` local; it does not need the real remote ID. Once the remote ID is set, local migrations should explicitly use the local config, as the package script does.
+
+The third database was created with explicit operator authorization on 2026-10-25:
+`cflab-bitcoin-signals`, binding `BTC_SIGNALS`, UUID
+`7630355d-eae7-4410-aef5-7a0486ddc523`, region ENAM. Do not recreate it. The
+production `wrangler.jsonc` entry is authoritative; backup metadata and restore
+protection derive the ID from it. No production migration or release has run.
+Configuration preflight passes 35 checks, and read-only Cloudflare resource
+metadata matches all three configured names/UUIDs. Pipeline credential checks
+still belong to the gated release. See [the independent audit](BITCOIN-SIGNALS-AUDIT.md).
 
 For later deployments, reuse these exact CFLab resources instead of recreating them. Keep R2 public access disabled and do not configure a public bucket domain.
 

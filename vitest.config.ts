@@ -7,6 +7,7 @@ export default defineConfig({
     miniflare: { bindings: {
       TEST_MIGRATIONS: await readD1Migrations('./migrations'),
       TEST_ANALYTICS_MIGRATIONS: await readD1Migrations('./migrations-analytics'),
+      TEST_SIGNALS_MIGRATIONS: await readD1Migrations('./migrations-bitcoin-signals'),
       PROXY_ALLOWED_HOSTS: 'api.open-meteo.com',
     } },
   })],

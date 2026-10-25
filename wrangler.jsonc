@@ -39,6 +39,15 @@
     "database_name": "cflab-analytics",
     "database_id": "54e8af8e-3345-40e7-88fd-462a688421b5",
     "migrations_dir": "migrations-analytics"
+  }, {
+    // Bitcoin Signals: created with explicit operator authorization on 2026-10-25.
+    // This is the authoritative production resource ID; migrations run through CI.
+    "binding": "BTC_SIGNALS",
+    "database_name": "cflab-bitcoin-signals",
+    "database_id": "7630355d-eae7-4410-aef5-7a0486ddc523",
+    "migrations_dir": "migrations-bitcoin-signals"
   }],
-  "r2_buckets": [{ "binding": "FILES", "bucket_name": "cflab-files" }]
+  "r2_buckets": [{ "binding": "FILES", "bucket_name": "cflab-files" }],
+  // Hourly market/network collection and daily slower-adoption collection.
+  "triggers": { "crons": ["7 * * * *", "41 6 * * *"] }
 }

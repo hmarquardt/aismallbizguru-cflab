@@ -13,7 +13,7 @@
 // database is a separate step (scripts/backup/restore-verify.mjs) so a backup is
 // only declared good after a restore has actually succeeded.
 //
-// Usage: node scripts/backup/d1-export.mjs --out <dir> [--database DB|ANALYTICS|all]
+// Usage: node scripts/backup/d1-export.mjs --out <dir> [--database DB|ANALYTICS|BTC_SIGNALS|all]
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
@@ -23,11 +23,22 @@ import {
   backupKeys, buildDumpSql, buildManifest, canonicalRowHash, compactStamp, orderTablesByDependencies, sha256File, verifyExport,
   wranglerResultSets, wranglerRows, writeJsonFile,
 } from './lib.mjs';
+import { readConfig } from '../ci/verify-deployment-target.mjs';
 
 export const DATABASES = [
-  { binding: 'DB', label: 'cflab', databaseId: 'cb2d2eb4-2817-4581-8e50-d69212650adf', config: 'wrangler.jsonc', localConfig: 'wrangler.local.jsonc', minimumBytes: 4096 },
-  { binding: 'ANALYTICS', label: 'cflab-analytics', databaseId: '54e8af8e-3345-40e7-88fd-462a688421b5', config: 'wrangler.analytics.jsonc', localConfig: 'wrangler.analytics.local.jsonc', minimumBytes: 1024 },
-];
+  { binding: 'DB', label: 'cflab', config: 'wrangler.jsonc', localConfig: 'wrangler.local.jsonc', minimumBytes: 4096 },
+  { binding: 'ANALYTICS', label: 'cflab-analytics', config: 'wrangler.analytics.jsonc', localConfig: 'wrangler.analytics.local.jsonc', minimumBytes: 1024 },
+  { binding: 'BTC_SIGNALS', label: 'cflab-bitcoin-signals', config: 'wrangler.jsonc', localConfig: 'wrangler.local.jsonc', minimumBytes: 1024 },
+].map(database => ({
+  ...database,
+  // Resolve lazily: registry metadata is also used by Workers tests, while actual
+  // backup operations run in Node and read the authoritative production config.
+  get databaseId() {
+    const binding = readConfig(database.config).d1_databases.find(entry => entry.binding === database.binding);
+    if (!binding?.database_id || binding.database_name !== database.label) throw new Error(`invalid production binding: ${database.binding}`);
+    return binding.database_id;
+  },
+}));
 
 const TABLES_SQL = "SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%' ORDER BY name";
 
@@ -77,37 +88,23 @@ const SCHEMA_SQL = "SELECT type, name, sql FROM sqlite_schema WHERE sql IS NOT N
 // request does not: measured against a temporary database under concurrent
 // two-table commits, per-request reads tore 84% of the time and single-request
 // reads never did. If the single request fails (for example a database too large
-// for one response), the fallback is recorded in the manifest rather than hidden.
-export function dumpDatabase(database, { run = wrangler, allowSplitReads = true, log = console.log } = {}) {
+// for one response), fail closed. Per-table requests are not a consistent backup.
+export function dumpDatabase(database, { run = wrangler } = {}) {
   const schema = wranglerRows(run(['d1', 'execute', database.binding, '--remote', '--config', database.config, '--json', '--command', SCHEMA_SQL]).output)
     .map(row => ({ type: row.type, name: row.name, sql: String(row.sql) }));
   const { ordered, cycles } = orderTablesByDependencies(schema);
   if (!ordered.length) throw new Error(`${database.label}: the live database reported no tables; refusing to dump`);
 
-  const readAll = strategy => {
+  const readAll = () => {
     const rowsByTable = {};
-    if (strategy === 'single-request') {
-      const sets = wranglerResultSets(run(['d1', 'execute', database.binding, '--remote', '--config', database.config, '--json', '--command', ordered.map(table => `SELECT * FROM "${table}"`).join('; ')]).output);
-      if (sets.length !== ordered.length) throw new Error(`${database.label}: expected ${ordered.length} result sets from one request, received ${sets.length}`);
-      ordered.forEach((table, index) => { rowsByTable[table] = sets[index]; });
-      return rowsByTable;
-    }
-    for (const table of ordered) {
-      rowsByTable[table] = wranglerRows(run(['d1', 'execute', database.binding, '--remote', '--config', database.config, '--json', '--command', `SELECT * FROM "${table}"`]).output);
-    }
+    const sets = wranglerResultSets(run(['d1', 'execute', database.binding, '--remote', '--config', database.config, '--json', '--command', ordered.map(table => `SELECT * FROM "${table}"`).join('; ')]).output);
+    if (sets.length !== ordered.length) throw new Error(`${database.label}: expected ${ordered.length} result sets from one request, received ${sets.length}`);
+    ordered.forEach((table, index) => { rowsByTable[table] = sets[index]; });
     return rowsByTable;
   };
 
-  let consistency = 'single-request-snapshot';
-  let rowsByTable;
-  try {
-    rowsByTable = readAll('single-request');
-  } catch (error) {
-    if (!allowSplitReads) throw error;
-    log(`WARN  ${database.label}: one-request read failed (${error.message}); falling back to per-table reads, which are NOT a single snapshot`);
-    rowsByTable = readAll('per-table');
-    consistency = 'per-table-reads-not-a-snapshot';
-  }
+  const consistency = 'single-request-snapshot';
+  const rowsByTable = readAll();
 
   // sqlite_sequence carries the AUTOINCREMENT counters. It is D1-managed
   // bookkeeping rather than application data, so it is read separately and written
@@ -134,6 +131,7 @@ export function currentBookmark(database, { run = wrangler } = {}) {
 }
 
 export async function exportDatabase(database, { outDir, stamp = compactStamp(), run = wrangler, gitRevision, capturedAt = new Date().toISOString(), method = 'dump' } = {}) {
+  if (/^00000000-/.test(database.databaseId)) throw new Error(`${database.label}: database is not provisioned; no production backup can be generated`);
   mkdirSync(outDir, { recursive: true });
   const keys = backupKeys({ database: database.label, stamp });
   const sqlPath = path.join(outDir, path.basename(keys.sql));
@@ -146,6 +144,7 @@ export async function exportDatabase(database, { outDir, stamp = compactStamp(),
   let verification;
   let source;
   let rowHashes;
+  let schemaHash;
   let consistency;
   let bookmarkBefore;
   let bookmarkAfter;
@@ -156,6 +155,7 @@ export async function exportDatabase(database, { outDir, stamp = compactStamp(),
     bookmarkAfter = currentBookmark(database, { run });
     sql = dump.sql;
     rowHashes = dump.rowHashes;
+    schemaHash = canonicalRowHash(dump.schema);
     consistency = dump.consistency;
     if (dump.cycles.length) throw new Error(`${database.label}: the schema has a foreign-key reference cycle (${dump.cycles.join(', ')}), so a dump cannot be ordered safely`);
     verification = verifyExport({ sql, expectedTables: tables, liveCounts: dump.rowCounts, minimumBytes: database.minimumBytes });
@@ -203,6 +203,7 @@ export async function exportDatabase(database, { outDir, stamp = compactStamp(),
   if (bookmarkBefore) manifest.bookmark_before = bookmarkBefore;
   if (bookmarkAfter) manifest.bookmark_after = bookmarkAfter;
   if (rowHashes) manifest.row_hashes = rowHashes;
+  if (schemaHash) manifest.schema_hash = schemaHash;
   if (Object.keys(verification.internalRowCounts).length) manifest.internal_row_counts = verification.internalRowCounts;
   const manifestPath = path.join(outDir, path.basename(keys.manifest));
   writeJsonFile(manifestPath, manifest);
@@ -227,7 +228,7 @@ function parseArgs(argv) {
   return options;
 }
 
-const USAGE = 'Usage: node scripts/backup/d1-export.mjs --out <dir> [--database DB|ANALYTICS|all] [--stamp <YYYYMMDDTHHMMSSZ>] [--method dump|export]';
+const USAGE = 'Usage: node scripts/backup/d1-export.mjs --out <dir> [--database DB|ANALYTICS|BTC_SIGNALS|all] [--stamp <YYYYMMDDTHHMMSSZ>] [--method dump|export]';
 
 async function main() {
   const options = parseArgs(process.argv.slice(2));

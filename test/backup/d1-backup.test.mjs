@@ -7,6 +7,7 @@ import {
 import { assessFreshness } from '../../scripts/backup/backup-status.mjs';
 import { PRODUCTION_DATABASES, assertNotProductionTarget, databaseFor } from '../../scripts/backup/restore-verify.mjs';
 import { DATABASES } from '../../scripts/backup/d1-export.mjs';
+import { readConfig } from '../../scripts/ci/verify-deployment-target.mjs';
 
 const TABLES = ['apps', 'd1_migrations', 'files'];
 const LIVE = { apps: 4, d1_migrations: 10, files: 1325 };
@@ -150,8 +151,10 @@ test('a restore can never target a production database', () => {
 });
 
 test('the backup tooling targets the documented production databases', () => {
-  assert.deepEqual(DATABASES.map(database => database.label), ['cflab', 'cflab-analytics']);
-  assert.deepEqual(DATABASES.map(database => database.databaseId), ['cb2d2eb4-2817-4581-8e50-d69212650adf', '54e8af8e-3345-40e7-88fd-462a688421b5']);
+  assert.deepEqual(DATABASES.map(database => database.label), ['cflab', 'cflab-analytics', 'cflab-bitcoin-signals']);
+  const signalsId = readConfig('wrangler.jsonc').d1_databases.find(database => database.binding === 'BTC_SIGNALS').database_id;
+  assert.deepEqual(DATABASES.map(database => database.databaseId), ['cb2d2eb4-2817-4581-8e50-d69212650adf', '54e8af8e-3345-40e7-88fd-462a688421b5', signalsId]);
+  assert.deepEqual(DATABASES.map(database => database.binding), ['DB', 'ANALYTICS', 'BTC_SIGNALS']);
   for (const database of DATABASES) {
     assert.ok(database.config.endsWith('.jsonc') && database.localConfig.includes('local'), `${database.label} needs both configs`);
   }

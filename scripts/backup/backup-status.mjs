@@ -17,12 +17,14 @@ export const DEFAULT_MAX_AGE_HOURS = 30;
 
 // Pure decision function so the freshness rule is testable without a network.
 export function assessFreshness({ databases, manifests, now = Date.now(), maxAgeHours = DEFAULT_MAX_AGE_HOURS }) {
+  if (!Number.isFinite(maxAgeHours) || maxAgeHours <= 0) throw new Error('maxAgeHours must be positive and finite');
   const maxAgeMs = maxAgeHours * 3600 * 1000;
   const report = [];
   const stale = [];
   for (const database of databases) {
     const forDatabase = manifests
       .filter(entry => entry.manifest?.database === database)
+      .filter(entry => !(entry.problems?.length) && Number.isFinite(Date.parse(entry.manifest.captured_at)) && Date.parse(entry.manifest.captured_at) <= now)
       .sort((a, b) => (a.manifest.captured_at < b.manifest.captured_at ? 1 : -1));
     const newest = forDatabase[0];
     if (!newest) {
@@ -77,7 +79,7 @@ async function main() {
   const maxAgeHours = maxAgeIndex === -1 ? DEFAULT_MAX_AGE_HOURS : Number(args[maxAgeIndex + 1]);
   const client = r2FromEnvironment();
   const manifests = await loadBackupManifests({ client });
-  const { ok, stale, report } = assessFreshness({ databases: ['cflab', 'cflab-analytics'], manifests, maxAgeHours });
+  const { ok, stale, report } = assessFreshness({ databases: ['cflab', 'cflab-analytics', 'cflab-bitcoin-signals'], manifests, maxAgeHours });
   if (args.includes('--json')) {
     console.log(JSON.stringify({ ok, max_age_hours: maxAgeHours, report, problems: manifests.filter(entry => entry.problems.length) }, null, 2));
   } else {

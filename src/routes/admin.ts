@@ -4,6 +4,20 @@ import { ApiError, boolean, fields, id, invalid, jsonBody, object, slug, string,
 import { hashToken, newToken, scopes } from '../auth/tokens';
 import { sourceInput } from '../proxy/policy';
 import { adminUsers } from './admin-users';
+import { BITCOIN_SIGNALS, STORAGE_BACKENDS, storageBackendForBinding, storageHealth } from '../projects';
+import { projectStatus } from '../bitcoin-signals/status';
+
+// Storage is reported from the explicit allowlist in src/projects.ts. A registry
+// row naming an unknown binding is reported as unknown rather than resolved.
+function storageSummary(binding: string | null) {
+  if (!binding) return { backend: STORAGE_BACKENDS.primary.backend, binding: STORAGE_BACKENDS.primary.binding, label: STORAGE_BACKENDS.primary.label };
+  try {
+    const info = storageBackendForBinding(binding);
+    return { backend: info.backend, binding: info.binding, label: info.label };
+  } catch {
+    return { backend: 'unknown', binding, label: 'unrecognized storage binding' };
+  }
+}
 
 export function appOutput(row: AppRow) {
   const { config_json, ...rest } = row;
@@ -23,8 +37,54 @@ admin.route('/users', adminUsers);
 admin.get('/apps', async c => {
   const after = c.req.query('after') ?? '';
   if (after) slug(after);
-  const { results } = await c.env.DB.prepare('SELECT * FROM apps WHERE id > ? ORDER BY id LIMIT 101').bind(after).all<AppRow>();
-  return c.json({ apps: results.slice(0, 100).map(appOutput), next_cursor: results.length > 100 ? results[99]!.id : null });
+  const { results } = await c.env.DB.prepare(
+    `SELECT a.*, s.binding AS storage_binding FROM apps a
+     LEFT JOIN project_storage s ON s.app_id = a.id
+     WHERE a.id > ? ORDER BY a.id LIMIT 101`).bind(after).all<AppRow & { storage_binding: string | null }>();
+  return c.json({
+    apps: results.slice(0, 100).map(row => ({
+      ...appOutput(row),
+      storage: storageSummary(row.storage_binding),
+      dashboard: row.id === BITCOIN_SIGNALS.appId ? BITCOIN_SIGNALS.dashboardPath : null,
+    })),
+    next_cursor: results.length > 100 ? results[99]!.id : null,
+  });
+});
+
+// First-class project registry view for the administration screens: identity and
+// storage side by side, without exposing any project data.
+admin.get('/projects', async c => {
+  const { results } = await c.env.DB.prepare(
+    `SELECT a.id, a.name, a.active, s.binding AS storage_binding, s.migrations_dir AS storage_migrations_dir
+     FROM apps a LEFT JOIN project_storage s ON s.app_id = a.id ORDER BY a.id`).all<{
+    id: string; name: string; active: number; storage_binding: string | null; storage_migrations_dir: string | null;
+  }>();
+  return c.json({
+    projects: results.map(row => {
+      const storage = storageSummary(row.storage_binding);
+      return {
+        id: row.id, name: row.name, active: !!row.active,
+        dashboard: row.id === BITCOIN_SIGNALS.appId ? BITCOIN_SIGNALS.dashboardPath : null,
+        storage: { ...storage, migrations_dir: row.storage_migrations_dir ?? STORAGE_BACKENDS.primary.migrationsDir },
+      };
+    }),
+  });
+});
+
+// Project health. Bitcoin Signals reports collection, source freshness, alerts,
+// and the recorded backup verification; any other project reports its storage
+// backend only, so this can never become a generic database browser.
+admin.get('/projects/:app/status', async c => {
+  const appId = slug(c.req.param('app'));
+  const app = await c.env.DB.prepare('SELECT id, name, active FROM apps WHERE id = ?').bind(appId)
+    .first<{ id: string; name: string; active: number }>();
+  if (!app) throw new ApiError(404, 'app_not_found', 'App not found');
+  if (appId === BITCOIN_SIGNALS.appId) return c.json(await projectStatus(c.env));
+  const storage = await storageHealth(c.env, appId);
+  return c.json({
+    generated_at: new Date().toISOString(),
+    project: { app_id: app.id, name: app.name, dashboard: null, storage },
+  });
 });
 admin.post('/apps', async c => {
   const body = await jsonBody(c.req.raw); fields(body, ['id', 'name', 'active', 'origins', 'config']);

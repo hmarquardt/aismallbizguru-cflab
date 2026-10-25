@@ -11,6 +11,8 @@ import { publicSafari } from './routes/public-safari';
 import { analytics } from './routes/analytics';
 import { publicTopHat } from './routes/public-top-hat';
 import { accountPage, forgotPage, loginPage, resetPage, usersPage } from './ui';
+import { signals } from './bitcoin-signals/api';
+import { signalsPage } from './bitcoin-signals/dashboard';
 import { deploymentIdentity } from './shared/revision';
 
 const methods = ['GET', 'POST', 'PATCH', 'DELETE'];
@@ -52,6 +54,11 @@ export function createApp(adminAuth: MiddlewareHandler<ContextEnv>) {
   app.route('/api/analytics', analytics);
   app.use('/api/admin/*', adminAuth);
   app.route('/api/admin', admin);
+  // Bitcoin Signals: identity and permissions are checked against the primary
+  // database inside the route; all project data comes from the BTC_SIGNALS
+  // binding. The page itself is an empty shell with no data.
+  app.route('/api/bitcoin-signals', signals);
+  app.get('/bitcoin-signals', () => html(signalsPage()));
   app.get('/admin', c => c.redirect('/admin/users'));
   app.get('/admin/login', () => html(loginPage()));
   app.get('/admin/users', () => html(usersPage()));

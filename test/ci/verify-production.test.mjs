@@ -36,7 +36,7 @@ function rejectsWithCategory(fetchImpl, category) {
 test('a completely unreachable deployment fails every check as a network failure', async () => {
   await assert.rejects(verifyPrimary(async () => { throw new Error('down'); }), error => {
     assert.equal(error.category, 'checks');
-    assert.match(error.message, /8 of 8 production checks failed for cflab/);
+    assert.match(error.message, /12 of 12 production checks failed for cflab/);
     assert.match(error.message, /\[network\]/);
     return true;
   });

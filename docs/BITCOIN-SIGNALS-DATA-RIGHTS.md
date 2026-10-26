@@ -120,13 +120,18 @@ as published reports to evade deletion. The normal backup client gains no delete
 method. This resolves the internal policy conflict without a new service or plan.
 
 The adapter is enabled daily and linked **Powered by CoinGecko** attribution is
-restored. [Keyless access](https://docs.coingecko.com/docs/errors-and-rate-limits)
-is documented and IP-limited; restrictions fail without borrowed keys, proxy
-rotation or retries. Treasury values remain reported holdings, not a CFLab filings
-audit. [D1](https://developers.cloudflare.com/d1/reference/data-security/) and
+restored. CoinGecko's own Demo API documentation requires the
+`x-cg-demo-api-key` header for this endpoint, so the collector authenticates with
+the operator's own free Demo key held as the Worker Secret
+`COINGECKO_DEMO_API_KEY` on the existing Worker: one request per day, no borrowed
+keys, no proxy rotation, and no retry loop. Provider limits are respected — a
+documented rate limit (`http_429`) ends that source's attempt and is recorded, never
+worked around. Treasury values remain reported holdings, not a CFLab filings audit.
+[D1](https://developers.cloudflare.com/d1/reference/data-security/) and
 [R2](https://developers.cloudflare.com/r2/reference/data-security/) document
 automatic AES-256 storage encryption and TLS; exports/local drill copies remain
-private operator artifacts. No new plan, secret or service was introduced.
+private operator artifacts. No new paid plan, service or infrastructure was
+introduced, and the key is never stored in D1, R2, exports, logs or the repository.
 
 ## mempool.space and suitable alternatives
 

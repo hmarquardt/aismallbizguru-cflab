@@ -433,13 +433,21 @@ than for convenience.
 
 ## Known limitations and drift
 
-* **Bitcoin Signals is deployed; acceptance is incomplete (2026-10-26).**
-  The owner restriction was released as `53924a9` through the unchanged gates.
-  Authenticated Signals/Analytics checks, real history persistence and the
-  three-database restore drill pass. Production CoinGecko treasury attempts
-  receive HTTP 429; do not report successful daily ingestion or bypass limits.
-  Deribit stays disabled and email alerts stay off. See
-  [BITCOIN-SIGNALS-ACCEPTANCE.md](BITCOIN-SIGNALS-ACCEPTANCE.md).
+* **Bitcoin Signals is deployed and accepted (2026-10-26).** The owner restriction
+  was released as `53924a9` and the CoinGecko Demo API authentication as
+  `8202ac0` through the unchanged gates ([run 40355162839](https://github.com/hmarquardt/aismallbizguru-cflab/actions/runs/40355162839)).
+  A real production treasury collection succeeded, persisted 53 reported
+  observations and appears on the authenticated Radar. Provider rate limits are
+  recorded as `http_429`, never hidden or worked around, and a missing key fails
+  only that source with `missing_credential`. Deribit stays disabled and email
+  alerts stay off. See [BITCOIN-SIGNALS-ACCEPTANCE.md](BITCOIN-SIGNALS-ACCEPTANCE.md).
+* **A dashboard secret write is deployment drift.** Editing a Worker secret (or
+  adding one) creates a new, untagged Worker version outside this pipeline while
+  the previous `DEPLOY_REVISION` is carried over, so `GET /api/version` still
+  reports the old revision and `verify-drift.mjs` alone cannot see it. The version
+  tags and author/source in `wrangler versions list` do. Reconcile by releasing
+  `main` through this pipeline; never by `wrangler versions deploy` or a manual
+  rollback. The 2026-10-26 CoinGecko secret write was reconciled this way.
 * **Three-database backup coverage is active.** Backup run 40337849021 and
   independent restore run 40342159814 verify primary, Analytics and Signals
   snapshots. All three freshness entries are green. Existing backup protections

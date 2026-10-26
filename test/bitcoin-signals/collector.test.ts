@@ -153,7 +153,7 @@ describe('scheduling protection', () => {
     expect(() => jobForCron('0 0 * * *')).toThrow(/unrecognized/);
   });
 
-  it('collects daily reported treasury history with attribution and idempotent repeats', async () => {
+  it('collects daily reported treasury history with attribution, authentication and idempotent repeats', async () => {
     const fetchImpl = vi.fn(stubFetch());
     const result = await runCollectionJob(bindings, 'daily', { trigger: 'manual', now: NOW, fetchImpl, skipAlerts: true });
     expect(result.status).toBe('ok');
@@ -165,6 +165,65 @@ describe('scheduling protection', () => {
     const repeat = await runCollectionJob(bindings, 'daily', { trigger: 'manual', now: NOW, fetchImpl, skipAlerts: true });
     expect(repeat.observations_added).toBe(0);
     expect(await observationCount()).toBe(5);
+  });
+
+  it('authenticates the CoinGecko request without leaking the key into the URL, storage or result', async () => {
+    const key = bindings.COINGECKO_DEMO_API_KEY!;
+    expect(key).toBeTruthy();
+    const fetchImpl = vi.fn(stubFetch());
+    const result = await runCollectionJob(bindings, 'daily', { trigger: 'manual', now: NOW, fetchImpl, skipAlerts: true });
+    expect(result.status).toBe('ok');
+    // The key travels in the documented Demo header and nowhere else.
+    const [requestedUrl, init] = fetchImpl.mock.calls[0]! as [string, RequestInit];
+    expect(requestedUrl).toBe(URLS.coingecko);
+    expect(requestedUrl).not.toContain(key);
+    expect(init.headers).toMatchObject({ 'x-cg-demo-api-key': key });
+    // It is not persisted as evidence, provenance, a value or a diagnostic.
+    const observations = await bindings.BTC_SIGNALS.prepare('SELECT source_url, meta_json, unit, definition FROM bs_observations').all();
+    expect(JSON.stringify(result)).not.toContain(key);
+    expect(JSON.stringify(observations.results)).not.toContain(key);
+    const runs = await bindings.BTC_SIGNALS.prepare('SELECT status, error_code, error_message FROM bs_source_runs').all();
+    expect(JSON.stringify(runs.results)).not.toContain(key);
+  });
+
+  it('records a provider rate limit for that source only and writes no treasury history', async () => {
+    const key = bindings.COINGECKO_DEMO_API_KEY!;
+    const fetchImpl = vi.fn(stubFetch({
+      [URLS.coingecko]: () => new Response(JSON.stringify({ status: { error_code: 429, error_message: 'rate limited' } }),
+        { status: 429, headers: { 'content-type': 'application/json' } }),
+    }));
+    const result = await runCollectionJob(bindings, 'daily', { trigger: 'manual', now: NOW, fetchImpl, skipAlerts: true });
+    expect(result.status).toBe('failed');
+    expect(result.sources).toHaveLength(1);
+    expect(result.sources[0]).toMatchObject({ source_id: 'coingecko-treasury', status: 'failed', observations_added: 0, error_code: 'http_429' });
+    // The authenticated request was actually attempted, and the failure is stored
+    // as a stable code with a sanitized message that cannot carry a credential.
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect((fetchImpl.mock.calls[0]![1] as RequestInit).headers).toMatchObject({ 'x-cg-demo-api-key': key });
+    const run = await bindings.BTC_SIGNALS.prepare("SELECT status, error_code, error_message FROM bs_source_runs WHERE source_id = 'coingecko-treasury'").first();
+    expect(run).toMatchObject({ status: 'failed', error_code: 'http_429', error_message: 'the source answered HTTP 429' });
+    expect(await observationCount('treasury_total_btc')).toBe(0);
+    expect(await observationCount()).toBe(0);
+    // A rate limit is a provider condition, not a configuration claim, and the
+    // next permitted attempt is not blocked by a broken lease.
+    const lock = await bindings.BTC_SIGNALS.prepare('SELECT COUNT(*) AS n FROM bs_collection_locks').first<{ n: number }>();
+    expect(Number(lock!.n)).toBe(0);
+  });
+
+  it('fails only the CoinGecko source when the Demo key is not configured', async () => {
+    const withoutKey = { ...bindings, COINGECKO_DEMO_API_KEY: undefined } as unknown as Bindings;
+    const fetchImpl = vi.fn(stubFetch());
+    const result = await runCollectionJob(withoutKey, 'daily', { trigger: 'manual', now: NOW, fetchImpl, skipAlerts: true });
+    expect(result.status).toBe('failed');
+    expect(result.sources[0]).toMatchObject({ source_id: 'coingecko-treasury', status: 'failed', error_code: 'missing_credential' });
+    expect(result.sources[0]!.error_message).toBe('the source requires a configured API key');
+    // Nothing was sent unauthenticated: an unconfigured key is not a provider error.
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(await observationCount()).toBe(0);
+    // The hourly job, which needs no credential, is unaffected.
+    const hourly = await runCollectionJob(withoutKey, 'hourly', { trigger: 'manual', now: NOW, fetchImpl, skipAlerts: true });
+    expect(hourly.status).toBe('ok');
+    expect(hourly.sources.every(source => source.status === 'ok')).toBe(true);
   });
 
   it('refuses to overlap a lease held by another run', async () => {

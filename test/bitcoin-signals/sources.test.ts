@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { COLLECTORS, MAX_RESPONSE_BYTES, fetchJsonFromAllowlist } from '../../src/bitcoin-signals/sources';
+import { COLLECTORS, MAX_RESPONSE_BYTES, SourcePayloadError, fetchJsonFromAllowlist, sourceRequestHeaders } from '../../src/bitcoin-signals/sources';
 
 describe('bounded public-source transport', () => {
   it('rejects untrusted hosts, credentials, ports and protocols before fetching', async () => {
@@ -35,6 +35,65 @@ describe('bounded public-source transport', () => {
     await expect(fetchJsonFromAllowlist('https://api.exchange.coinbase.com/a', (async () => new Response(stream, { headers: { 'content-type': 'application/json' } })) as typeof fetch))
       .rejects.toMatchObject({ code: 'too_large' });
     expect(cancelled).toBe(true);
+  });
+});
+
+describe('CoinGecko Demo API credential', () => {
+  const key = 'demo-key-held-in-the-worker-secret';
+  const treasuryUrl = 'https://api.coingecko.com/api/v3/companies/public_treasury/bitcoin';
+
+  function capture() {
+    const calls: { url: string; headers: Record<string, string> }[] = [];
+    const fetchImpl = (async (url: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url: String(url), headers: (init?.headers ?? {}) as Record<string, string> });
+      return new Response(JSON.stringify({ ok: true }), { headers: { 'content-type': 'application/json' } });
+    }) as typeof fetch;
+    return { calls, fetchImpl };
+  }
+
+  it('sends the configured key as the x-cg-demo-api-key header and never in the URL', async () => {
+    const { calls, fetchImpl } = capture();
+    const headers = sourceRequestHeaders('coingecko-treasury', { COINGECKO_DEMO_API_KEY: key });
+    expect(headers).toEqual({ 'x-cg-demo-api-key': key });
+    await fetchJsonFromAllowlist(treasuryUrl, fetchImpl, headers);
+    expect(calls[0]!.headers).toMatchObject({ accept: 'application/json', 'x-cg-demo-api-key': key });
+    expect(calls[0]!.url).toBe(treasuryUrl);
+    expect(calls[0]!.url).not.toContain(key);
+    expect(JSON.stringify(calls.map(call => call.url))).not.toContain(key);
+  });
+
+  it('gives every other source no credential and refuses the header on another host', async () => {
+    expect(sourceRequestHeaders('coinbase-spot', { COINGECKO_DEMO_API_KEY: key })).toEqual({});
+    expect(sourceRequestHeaders('curated-research', { COINGECKO_DEMO_API_KEY: key })).toEqual({});
+    const { calls, fetchImpl } = capture();
+    await expect(fetchJsonFromAllowlist('https://api.exchange.coinbase.com/products/BTC-USD/ticker', fetchImpl,
+      sourceRequestHeaders('coingecko-treasury', { COINGECKO_DEMO_API_KEY: key })))
+      .rejects.toMatchObject({ code: 'header_not_allowed' });
+    expect(calls).toHaveLength(0);
+  });
+
+  it('refuses a blank or multi-line credential value before any request', async () => {
+    const { calls, fetchImpl } = capture();
+    for (const value of ['', '   ', ['abc', 'define'].join(String.fromCharCode(10))]) {
+      await expect(fetchJsonFromAllowlist(treasuryUrl, fetchImpl, { 'x-cg-demo-api-key': value }))
+        .rejects.toMatchObject({ code: 'header_not_allowed' });
+    }
+    expect(calls).toHaveLength(0);
+  });
+
+  it('reports missing configuration as its own stable source error', () => {
+    for (const value of [undefined, '', '   ']) {
+      let caught: unknown;
+      try {
+        sourceRequestHeaders('coingecko-treasury', { COINGECKO_DEMO_API_KEY: value });
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(SourcePayloadError);
+      expect(caught).toMatchObject({ code: 'missing_credential' });
+      // The diagnostic never echoes the configured value or a key-shaped string.
+      expect((caught as Error).message).toBe('the source requires a configured API key');
+    }
   });
 });
 

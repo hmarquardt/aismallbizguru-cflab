@@ -30,6 +30,11 @@ export interface Bindings {
   PROXY_ALLOWED_HOSTS: string;
   PROXY_SECRETS?: string;
   DEPLOY_REVISION?: string;
+  // Bitcoin Signals' CoinGecko Demo API credential. A Worker Secret set outside
+  // the repository (`wrangler secret put` or the dashboard), never a `vars`
+  // entry. It is read only by the CoinGecko collector and sent only as the
+  // `x-cg-demo-api-key` request header.
+  COINGECKO_DEMO_API_KEY?: string;
   EMAIL?: EmailBinding;
   RL_LOGIN?: RateLimitBinding;
   RL_RECOVERY?: RateLimitBinding;

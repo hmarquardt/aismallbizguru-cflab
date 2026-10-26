@@ -12,6 +12,12 @@
     { "pattern": "lab.aismallbizguru.com/*", "zone_name": "aismallbizguru.com" }
   ],
   "observability": { "enabled": true, "logs": { "invocation_logs": false } },
+  // Secrets are Worker Secrets set outside the repository (`wrangler secret put`
+  // or the dashboard), never entries here: a `vars` value is deployed in plaintext
+  // and appears in the bundle. COINGECKO_DEMO_API_KEY is Bitcoin Signals'
+  // CoinGecko Demo API key. It is read as env.COINGECKO_DEMO_API_KEY and sent only
+  // as the x-cg-demo-api-key header. A new secret creates a new Worker version, so
+  // the next gated GitHub Actions release is what reconciles it with `main`.
   "vars": {
     "PROXY_ALLOWED_HOSTS": "",
     "AUTH_FROM_EMAIL": "noreply@mail.aismallbizguru.com",

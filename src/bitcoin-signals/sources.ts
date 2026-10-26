@@ -4,7 +4,13 @@
 // this file. No caller-supplied URL, host, path, query, header, or credential
 // reaches a fetch. Responses are validated field by field: a shape change or a
 // nonsense value fails that one source instead of writing corrupt history.
+//
+// One source needs a credential: CoinGecko's Demo API answers HTTP 429 to
+// unauthenticated traffic. The key is read from the Worker secret binding named
+// below and travels only in an outbound request header, so it never appears in a
+// URL, query string, stored row, log line, export, or response.
 
+import type { Bindings } from '../types';
 import { MAX_FUNDING_RATE_8H, inferFundingIntervalHours, isFundingIntervalHours, normalizeToEightHours } from './market';
 import { isSourceEnabled } from './policy';
 
@@ -102,6 +108,27 @@ export interface Collector {
   collect(fetchJson: FetchJson, now: Date): Promise<RawObservation[]>;
 }
 
+// Credentials are held by name: the binding and the header are both constants in
+// this file, and the value comes only from the Worker environment. Nothing here
+// accepts a caller-provided credential.
+const SOURCE_CREDENTIALS: Readonly<Record<string, { header: string; env: keyof Bindings }>> = {
+  'coingecko-treasury': { header: 'x-cg-demo-api-key', env: 'COINGECKO_DEMO_API_KEY' },
+};
+
+// Returns the outbound credential headers for one source. A source with no
+// registered credential gets none. A registered credential that is missing or
+// blank fails that source alone with a stable code, before any request is made,
+// so an unconfigured key can never look like a provider outage or a rate limit.
+export function sourceRequestHeaders(sourceId: string, env: Pick<Bindings, 'COINGECKO_DEMO_API_KEY'>): Record<string, string> {
+  const credential = Object.hasOwn(SOURCE_CREDENTIALS, sourceId) ? SOURCE_CREDENTIALS[sourceId]! : null;
+  if (!credential) return {};
+  const value = (env as Record<string, unknown>)[credential.env];
+  if (typeof value !== 'string' || value.trim() === '') {
+    throw new SourcePayloadError('missing_credential', 'the source requires a configured API key');
+  }
+  return { [credential.header]: value.trim() };
+}
+
 export class SourcePayloadError extends Error {
   constructor(public code: string, message: string) {
     super(message);
@@ -117,6 +144,12 @@ const SOURCE_HOSTS: Readonly<Record<string, string>> = {
   'mempool-space': 'mempool.space', 'coingecko-treasury': 'api.coingecko.com',
 };
 export const ALLOWED_HOSTS: ReadonlySet<string> = new Set(Object.values(SOURCE_HOSTS));
+
+// A credential header is accepted only for the host that its own source owns, so
+// a mistake or a future adapter cannot forward the key to another provider.
+const AUTH_HEADERS_BY_HOST: Readonly<Record<string, readonly string[]>> = Object.fromEntries(
+  Object.entries(SOURCE_CREDENTIALS).map(([sourceId, credential]) => [SOURCE_HOSTS[sourceId], [credential.header]]),
+);
 
 export const MAX_RESPONSE_BYTES = 1_500_000;
 export const SOURCE_TIMEOUT_MS = 8_000;
@@ -173,7 +206,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 // Bounded, allowlisted JSON GET. Redirects are refused, the body is read with a
 // hard byte cap, and a non-JSON or non-2xx response is an isolated source error.
-export async function fetchJsonFromAllowlist(url: string, fetchImpl: typeof fetch = fetch): Promise<unknown> {
+// `credentialHeaders` may only carry a header that the requested host's own
+// source registered, and only in the header — never in the URL.
+export async function fetchJsonFromAllowlist(
+  url: string, fetchImpl: typeof fetch = fetch, credentialHeaders: Record<string, string> = {},
+): Promise<unknown> {
   const parsed = new URL(url);
   if (parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.port) {
     throw new SourcePayloadError('url', 'source URLs must be plain HTTPS without credentials or an explicit port');
@@ -181,6 +218,16 @@ export async function fetchJsonFromAllowlist(url: string, fetchImpl: typeof fetc
   if (!ALLOWED_HOSTS.has(parsed.hostname)) throw new SourcePayloadError('host_not_allowed', `${parsed.hostname} is not an allowlisted source host`);
   const sourceId = Object.keys(SOURCE_HOSTS).find(id => SOURCE_HOSTS[id] === parsed.hostname)!;
   if (!isSourceEnabled(sourceId)) throw new SourcePayloadError('source_disabled', 'source collection is disabled pending permission');
+  const headers: Record<string, string> = { accept: 'application/json', 'user-agent': 'CFLab-BitcoinSignals/1.0' };
+  const permitted = AUTH_HEADERS_BY_HOST[parsed.hostname] ?? [];
+  for (const [name, value] of Object.entries(credentialHeaders)) {
+    if (!permitted.includes(name.toLowerCase())) {
+      throw new SourcePayloadError('header_not_allowed', `a credential header is not permitted for ${parsed.hostname}`);
+    }
+    // A blank or multi-line value is refused rather than normalised.
+    if (value.trim() === '' || /[\r\n]/.test(value)) throw new SourcePayloadError('header_not_allowed', 'a credential header value is invalid');
+    headers[name.toLowerCase()] = value;
+  }
   let response: Response;
   try {
     // Workers rejects redirect: 'error' (only 'follow' and 'manual' exist), so a
@@ -188,7 +235,7 @@ export async function fetchJsonFromAllowlist(url: string, fetchImpl: typeof fetc
     response = await fetchImpl(url, {
       method: 'GET',
       redirect: 'manual',
-      headers: { accept: 'application/json', 'user-agent': 'CFLab-BitcoinSignals/1.0' },
+      headers,
       signal: AbortSignal.timeout(SOURCE_TIMEOUT_MS),
     });
   } catch (error) {
@@ -483,6 +530,10 @@ const mempoolLightning: Collector = {
 // CoinGecko aggregates public-company disclosures. The API has no as-of
 // timestamp, so the observation time is the retrieval time and the provenance
 // records exactly that. Values are reported figures, never audited by CFLab.
+// The Demo API documents this endpoint at
+// https://docs.coingecko.com/demo/reference/companies-public-treasury and requires
+// the `x-cg-demo-api-key` header that `sourceRequestHeaders` supplies; the key is
+// never part of the URL, the stored evidence URL, or a stored value.
 const coingeckoTreasury: Collector = {
   id: 'coingecko-treasury',
   cadence: 'daily',

@@ -72,6 +72,21 @@ plausible ranges, with an 8-second timeout and a 1.5 MB body cap. Redirects are
 refused by checking the response status (Workers `fetch` only supports `follow`
 and `manual`, not `error`), and the content type must be JSON.
 
+One source is authenticated. The CoinGecko Demo API answers HTTP 429 to
+unauthenticated traffic, so the treasury collector reads the Worker Secret
+`COINGECKO_DEMO_API_KEY` (`env.COINGECKO_DEMO_API_KEY`) and sends it only as the
+`x-cg-demo-api-key` request header, which is the documented Demo authentication
+method for
+[`GET /api/v3/companies/public_treasury/bitcoin`](https://docs.coingecko.com/demo/reference/companies-public-treasury)
+(base URL `https://api.coingecko.com/api/v3/`, Demo plan, 100 calls/min; this
+collector makes one call a day). The header is host-bound: it is refused for every
+host except `api.coingecko.com`, and it never appears in a URL, query string,
+stored observation, evidence URL, source-run error, export, log line or response.
+A missing or blank key fails only the CoinGecko source, before a request is made,
+with the stable code `missing_credential`; it is never sent unauthenticated. The
+key's value is not in `wrangler.jsonc` (`vars` would deploy it in plaintext and in
+the bundle) and must never be committed.
+
 The table below describes retained adapter capabilities, not permission to collect.
 Earlier local endpoint probes are historical diagnostics only. They were not
 imported into production; the current enabled set follows the terms review.
@@ -84,7 +99,7 @@ imported into production; the current enabled set follows the terms review.
 | `kraken-spot` | `/0/public/Ticker?pair=XBTUSD` | hourly | measured | XBT/USD last trade (no source timestamp: recorded at retrieval and labelled) |
 | `coinbase-spot` | `/products/BTC-USD/ticker` | hourly | measured | BTC/USD last trade at the source-reported time |
 | `mempool-space` | `/api/v1/lightning/statistics/latest` | hourly | reported | Public Lightning node count, channel count, total public capacity, recorded at collection time with the dataset id and its `added` date as provenance (that field is not a reliable measurement time) |
-| `coingecko-treasury` | `/api/v3/companies/public_treasury/bitcoin` | daily | reported | Reported public-company holdings, USD value, market-cap dominance, per-company holdings |
+| `coingecko-treasury` | `/api/v3/companies/public_treasury/bitcoin` (Demo API, `x-cg-demo-api-key`) | daily | reported | Reported public-company holdings, USD value, market-cap dominance, per-company holdings |
 | `curated-research` | — (human entry) | curated | curated | Attributed timeline entries for retention, sovereign settlement, and regulation |
 
 The six signals from the brief map as follows.
@@ -329,6 +344,22 @@ dashboard.
 * The first scheduled collection runs at the next `:07`, or immediately via
   Settings → Refresh (administrator, at most four manual runs per hour).
 
+### Secrets
+
+`COINGECKO_DEMO_API_KEY` is a **Worker Secret on `cflab`**, not a `vars` entry. It
+was installed by the operator through the Cloudflare dashboard on 2026-10-26 and is
+read only by the CoinGecko treasury collector. To set or rotate it, an operator runs
+`npx wrangler secret put COINGECKO_DEMO_API_KEY --config wrangler.jsonc` (or uses the
+dashboard); the agent must not change it, and the value must never be written to
+`.dev.vars.example`, a test fixture, a document or a commit.
+
+A secret write creates a new Worker version outside the pipeline, so the deployed
+version is briefly untagged and not the artifact the pipeline released, even though
+`GET /api/version` still reports the previous revision (`DEPLOY_REVISION` is carried
+over). That is deployment drift: reconcile it with the next gated GitHub Actions
+release of `main`, which redeploys the committed bundle and preserves the secret.
+Do not paper over it with `wrangler versions deploy` or a manual rollback.
+
 ## 10. Backup, restore, and recovery
 
 The third database has exactly the same guarantees as the other two:
@@ -364,18 +395,24 @@ the backups age, even if no new attestation is recorded.
   releases its lease after 10 minutes.
 * Manual refresh is administrator-only and rate-limited to four runs per hour. It
   shares the lease with the schedule.
-* Each source failure is recorded with a stable code (`http_503`, `shape`, `value`,
-  `network`, `content_type`, `too_large`, `host_not_allowed`, `rejected_observations`)
+* Each source failure is recorded with a stable code (`http_503`, `http_429`,
+  `shape`, `value`, `network`, `content_type`, `too_large`, `host_not_allowed`,
+  `missing_credential`, `header_not_allowed`, `rejected_observations`)
   and a sanitized message. A partial run is `partial`; a wholly failed run is
   `failed`;
   both are visible in Settings and raise a `stale-source` alert on the next evaluation.
+* A provider rate limit (`http_429`) is recorded for that source and run only. It is
+  not retried inside the run, so the provider's limit is never pushed, and it never
+  rewrites retained history. Rate limits are never worked around with a proxy, host
+  rotation or a substitute credential.
 
 ## 12. Tests
 
 | File | What it proves |
 | --- | --- |
 | `test/bitcoin-signals/market.test.ts` | 8-hour normalization, 1095-period annualization, APY for negative rates, fee/slippage deduction, breakeven, basis annualization and expiry guard, persistence dedupe and runs, interval inference, staleness, strict assumption validation |
-| `test/bitcoin-signals/collector.test.ts` | Normalized and fully attributed collection from every source, exact idempotency at the same clock, failure isolation with unchanged history, payload rejection, future/oversized observation rejection, lease, interval, and manual-limit protection, daily job selection, all four alert rules, delivery success and failure, notifications off by default |
+| `test/bitcoin-signals/sources.test.ts` | Bounded transport (hosts, credentials in URLs, redirects, HTTP 429, content type, byte cap), OKX interval provenance, and the CoinGecko credential rules: the key is sent only as `x-cg-demo-api-key`, never in the URL, never to another host, and a blank or multi-line value is refused before any request |
+| `test/bitcoin-signals/collector.test.ts` | Normalized and fully attributed collection from every source, exact idempotency at the same clock, failure isolation with unchanged history, payload rejection, future/oversized observation rejection, an authenticated CoinGecko request whose key never reaches a URL, observation, run row or result, a recorded `http_429` with no treasury history written, a `missing_credential` failure isolated to CoinGecko when the secret is absent, lease, interval, and manual-limit protection, daily job selection, all four alert rules, delivery success and failure, notifications off by default |
 | `test/bitcoin-signals/api.test.ts` | 401 for anonymous and machine tokens, 403 for non-members, read vs write vs administrator boundaries, evidence provenance and review attribution, duplicate and invalid evidence rejection, search/filter safety, storage separation, dashboard shell, arbitrage maths through the API, settings validation, refresh, backup attestation, bounded CSV export, administration integration, and unchanged existing administration |
 | `test/bitcoin-signals/migrations.test.ts` | All three schemas migrate independently and idempotently, seeds are correct, no `bs_` table exists in the primary or analytics database, no identity table exists in the signals database, the registry row is present, and the backup registry knows three databases |
 | `test/ui/bitcoin-signals.test.mjs` | Page structure, mobile viewport and stacked table labels, no external assets or inline handlers, radar rendering with freshness and source evidence, tab switching, assumption recalculation, review actions for writers only, settings including backup status, and the refresh/attestation flow |

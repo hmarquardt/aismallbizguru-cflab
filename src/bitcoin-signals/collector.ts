@@ -12,7 +12,7 @@
 //     outage never corrupts what is already stored.
 
 import type { Bindings } from '../types';
-import { SERIES, SourcePayloadError, collectorsFor, fetchJsonFromAllowlist, type Collector, type RawObservation } from './sources';
+import { SERIES, SourcePayloadError, collectorsFor, fetchJsonFromAllowlist, sourceRequestHeaders, type Collector, type RawObservation } from './sources';
 import { evaluateAlerts } from './alerts';
 
 export const HOURLY_MIN_INTERVAL_MINUTES = 50;
@@ -186,9 +186,13 @@ export async function runCollectionJob(env: Bindings, job: CollectionJob, option
     const sourcesStartedAt = new Date().toISOString();
     // Sources run concurrently so the whole job is bounded by the slowest source
     // timeout rather than the sum of them, and every failure is caught locally.
+    // Credential headers come from the Worker secret bindings by source name, so a
+    // missing key fails that one source with `missing_credential` before a request
+    // is made and never affects the other collectors.
     const results = await Promise.allSettled(collectors.map(async collector => {
       const sourceStarted = Date.now();
-      return { collector, rows: await collector.collect(url => fetchJsonFromAllowlist(url, fetchImpl), now), sourceStarted };
+      const credentialHeaders = sourceRequestHeaders(collector.id, env);
+      return { collector, rows: await collector.collect(url => fetchJsonFromAllowlist(url, fetchImpl, credentialHeaders), now), sourceStarted };
     }));
 
     for (const [index, result] of results.entries()) {

@@ -2,6 +2,10 @@
 DEV_ADMIN_TOKEN=
 # Optional JSON map, referenced by name from proxy source headers.
 PROXY_SECRETS={}
+# Optional locally: Bitcoin Signals' daily CoinGecko treasury collection reads this
+# as a Worker Secret (never a `vars` entry). It is sent only as the
+# x-cg-demo-api-key header. Leave it empty to exercise the missing-credential path.
+COINGECKO_DEMO_API_KEY=
 # Transactional email uses Cloudflare Email Service (Email Sending) through the
 # EMAIL send_email binding declared in wrangler.local.jsonc. No provider secret is
 # required. Locally the binding is simulated; add "remote": true to the binding in

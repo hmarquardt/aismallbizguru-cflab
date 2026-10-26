@@ -4,7 +4,9 @@ This review applies to one US-resident operator's private, noncommercial persona
 research. Only that operator's administrator account is intended to receive the
 measurements, derived calculations and exports. Cloudflare hosting, D1 history,
 private browser display and self-exports do not themselves constitute commercial
-redistribution. Existing membership capabilities do not establish a wider audience.
+redistribution. Existing membership capabilities do not establish a wider audience. The sole-owner
+identity check applies to Signals API and research status even for global admins;
+ordinary membership management cannot grant another account market-data access.
 A wider audience or commercial use needs a new review, not a new feature here.
 
 Categories: **1** expressly permitted personal use; **2** reasonably defensible

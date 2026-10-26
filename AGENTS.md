@@ -110,6 +110,10 @@ memberships stay in the primary database. The rules that must not be relaxed:
 * The storage binding is resolved only through the explicit allowlist in
   `src/projects.ts`. Do not accept a binding, database id, table name, or SQL from
 a request, and do not add a generic database browser.
+* Signals research is restricted to the existing operator ID pinned in
+  `src/projects.ts`. Global administrator status and ordinary project memberships
+  must not bypass it, including through project administration/status APIs. Keep
+  general CFLab administration semantics unchanged.
 * Email notifications default to off and stay off until an administrator enables
 them. Alerts are deterministic thresholds from stored data; an AI model is never a
   dependency of collection.

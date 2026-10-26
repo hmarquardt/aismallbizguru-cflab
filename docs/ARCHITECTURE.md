@@ -106,3 +106,10 @@ Fetch uses `redirect: manual`; every redirect is rejected, even to an otherwise 
 ## Services intentionally absent
 
 No Durable Objects: there is no per-entity coordination or live session requirement. No Queues or Workflows: requests are small and synchronous. No Analytics Engine: analytics is a separate Worker with explicit D1 tables. No DuckDB, Iceberg, or R2 Data Catalog: there is no current archival query workload. R2 and a small reporting seam leave room for these later without adding them to ordinary requests. No ORM, schema framework, third-party identity provider, MFA, or VPS. Authentication mail uses the native `send_email` binding, rate limiting uses native rate-limit bindings, and analytics retention/rollups use a native Cron trigger, rather than external services.
+
+Bitcoin Signals has one narrow project authorization exception: its immutable
+operator identity is pinned in `src/projects.ts`. Global administrator and
+membership capabilities do not grant its research access. The guard covers
+Signals endpoints, its administration status and generic project data routes;
+other CFLab administration and project semantics are unchanged. See
+[production acceptance](BITCOIN-SIGNALS-ACCEPTANCE.md).

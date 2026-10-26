@@ -20,7 +20,7 @@ calculation, or alerting.
 | Worker | `cflab` (`wrangler.jsonc`, `src/index.ts`) — the existing Worker |
 | Hostname | `cflab.aismallbizguru.com` (and `lab.aismallbizguru.com` by zone route) |
 | Dashboard | `GET /bitcoin-signals` (HTML shell, no data) |
-| API | `/api/bitcoin-signals/*` (human session + project membership) |
+| API | `/api/bitcoin-signals/*` (human session + pinned operator identity) |
 | Data | D1 `cflab-bitcoin-signals`, binding `BTC_SIGNALS`, migrations in `migrations-bitcoin-signals/` |
 | Identity | primary D1 `cflab`: `apps`, `users`, `project_memberships` |
 | Registry | primary D1 `cflab`: `project_storage` (backend + binding + migrations dir) |
@@ -243,12 +243,20 @@ with the session credential.
 
 ## 8. Access control
 
-Access reuses CFLab identity and permissions. A human session is validated against
-the primary database (`sessions` → `users`), then `appScopesFor` resolves the
-project: an active administrator gets write access, a `project_memberships` row
-with `write` gets write access, `read` gets read access, and anything else is
-`403`. Machine `cfl_` app tokens are rejected (`401`): they are record/file
-capabilities, not project-membership credentials.
+Access reuses CFLab human-session validation against the primary database
+(`sessions` → active `users`) and then requires the sole existing operator ID
+pinned in `src/projects.ts`, with its administrator role still active. The same
+owner check protects `/api/admin/projects/bitcoin-signals/status`. All other
+CFLab administration and project semantics are unchanged: the second administrator
+retains general privileges but receives `403` for Signals research, even after
+ordinary membership grants. Editable email, project configuration, headers, and
+membership rows cannot change the pinned identity. No account is deleted or demoted.
+Machine `cfl_` app tokens are rejected (`401`). Project identity/storage metadata
+in the general admin lists contains no research observations or alerts.
+
+All endpoints below require that owner session; the read/write labels describe
+operations, not permission for ordinary project members. No ownership-changing
+API, new credential, migration, service or authentication system is introduced.
 
 | Endpoint | Access |
 | --- | --- |

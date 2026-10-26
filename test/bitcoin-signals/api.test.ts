@@ -4,6 +4,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import production from '../../src/index';
 import type { Bindings } from '../../src/types';
 import { createSession } from '../../src/auth/human';
+import { BITCOIN_SIGNALS } from '../../src/projects';
 
 const bindings = env as unknown as Bindings & {
   TEST_MIGRATIONS: { name: string; queries: string[] }[];
@@ -14,8 +15,8 @@ const MACHINE_TOKEN = `cfl_${'a'.repeat(64)}`;
 
 interface SeededUser { id: string; token: string }
 
-async function seedUser({ admin = false, access }: { admin?: boolean; access?: 'read' | 'write' } = {}): Promise<SeededUser> {
-  const id = crypto.randomUUID();
+async function seedUser({ admin = false, access, owner = false }: { admin?: boolean; access?: 'read' | 'write'; owner?: boolean } = {}): Promise<SeededUser> {
+  const id = owner ? BITCOIN_SIGNALS.ownerUserId : crypto.randomUUID();
   const now = new Date().toISOString();
   await bindings.DB.prepare("INSERT INTO users (id, email, password_hash, active, is_admin, created_at, updated_at) VALUES (?, ?, NULL, 1, ?, ?, ?)")
     .bind(id, `user-${id.slice(0, 8)}@example.com`, admin ? 1 : 0, now, now).run();
@@ -26,6 +27,8 @@ async function seedUser({ admin = false, access }: { admin?: boolean; access?: '
   const session = await createSession(bindings, id);
   return { id, token: session.token };
 }
+
+async function seedOwner(): Promise<SeededUser> { return seedUser({ admin: true, owner: true }); }
 
 async function call(path: string, { method = 'GET', body, token }: { method?: string; body?: unknown; token?: string } = {}): Promise<Response> {
   const headers = new Headers();
@@ -82,19 +85,20 @@ beforeEach(async () => {
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe('access control', () => {
-  it('denies deactivated projects and users, and revoked memberships', async () => {
-    const reader = await seedUser({ access: 'read' });
+  it('denies deactivated projects and deactivated or demoted owner accounts', async () => {
+    const owner = await seedOwner();
     await bindings.DB.prepare("UPDATE apps SET active = 0 WHERE id = 'bitcoin-signals'").run();
     try {
-      expect((await call('/api/bitcoin-signals/radar', { token: reader.token })).status).toBe(404);
+      expect((await call('/api/bitcoin-signals/radar', { token: owner.token })).status).toBe(404);
     } finally {
       await bindings.DB.prepare("UPDATE apps SET active = 1 WHERE id = 'bitcoin-signals'").run();
     }
-    await bindings.DB.prepare('DELETE FROM project_memberships WHERE user_id = ?').bind(reader.id).run();
-    expect((await call('/api/bitcoin-signals/radar', { token: reader.token })).status).toBe(403);
-    await bindings.DB.prepare('UPDATE users SET active = 0 WHERE id = ?').bind(reader.id).run();
-    expect((await call('/api/bitcoin-signals/radar', { token: reader.token })).status).toBe(401);
+    await bindings.DB.prepare('UPDATE users SET is_admin = 0 WHERE id = ?').bind(owner.id).run();
+    expect((await call('/api/bitcoin-signals/radar', { token: owner.token })).status).toBe(403);
+    await bindings.DB.prepare('UPDATE users SET active = 0 WHERE id = ?').bind(owner.id).run();
+    expect((await call('/api/bitcoin-signals/radar', { token: owner.token })).status).toBe(401);
   });
+
   it('requires a human session and never accepts a machine token', async () => {
     expect((await call('/api/bitcoin-signals/radar')).status).toBe(401);
     expect((await call('/api/bitcoin-signals/radar', { token: MACHINE_TOKEN })).status).toBe(401);
@@ -106,36 +110,100 @@ describe('access control', () => {
     expect((await call('/api/bitcoin-signals/radar', { token: stranger.token })).status).toBe(403);
   });
 
-  it('gives a read member read-only access and an admin full access', async () => {
+  it('allows the owner without a membership and denies read/write members', async () => {
+    const owner = await seedOwner();
     const reader = await seedUser({ access: 'read' });
-    const admin = await seedUser({ admin: true });
-    const readRadar = await call('/api/bitcoin-signals/radar', { token: reader.token });
-    expect(readRadar.status).toBe(200);
-    const readBody = await json<{ caller: { access: string; is_admin: boolean } }>(readRadar);
-    expect(readBody.caller).toEqual({ email: expect.any(String), is_admin: false, access: 'read' });
-    expect((await call('/api/bitcoin-signals/radar', { token: admin.token })).status).toBe(200);
-    expect((await call('/api/bitcoin-signals/arbitrage', { token: reader.token })).status).toBe(200);
-    expect((await call('/api/bitcoin-signals/evidence', { token: reader.token })).status).toBe(200);
-    // Operator surfaces are administrator-only.
-    expect((await call('/api/bitcoin-signals/settings', { token: reader.token })).status).toBe(403);
-    expect((await call('/api/bitcoin-signals/status', { token: reader.token })).status).toBe(403);
-    expect((await call('/api/bitcoin-signals/export?dataset=evidence', { token: reader.token })).status).toBe(403);
-    expect((await call('/api/bitcoin-signals/refresh', { method: 'POST', body: { scope: 'hourly' }, token: reader.token })).status).toBe(403);
-    expect((await call('/api/bitcoin-signals/settings', { token: admin.token })).status).toBe(200);
+    const writer = await seedUser({ access: 'write' });
+    const response = await call('/api/bitcoin-signals/radar', { token: owner.token });
+    expect(response.status).toBe(200);
+    expect((await json<{ caller: { access: string; is_admin: boolean } }>(response)).caller)
+      .toMatchObject({ access: 'write', is_admin: true });
+    expect((await call('/api/bitcoin-signals/settings', { token: owner.token })).status).toBe(200);
+    for (const user of [reader, writer]) {
+      for (const path of ['radar', 'arbitrage', 'evidence', 'settings', 'status', 'export?dataset=observations']) {
+        expect((await call(`/api/bitcoin-signals/${path}`, { token: user.token })).status).toBe(403);
+      }
+      expect((await call('/api/bitcoin-signals/evidence', { method: 'POST', body: EVIDENCE, token: user.token })).status).toBe(403);
+    }
   });
 
-  it('denies a write member the operator surfaces but allows curated evidence', async () => {
-    const writer = await seedUser({ access: 'write' });
-    expect((await call('/api/bitcoin-signals/settings', { token: writer.token })).status).toBe(403);
-    expect((await call('/api/bitcoin-signals/evidence', { method: 'POST', body: EVIDENCE, token: writer.token })).status).toBe(201);
-    const reader = await seedUser({ access: 'read' });
-    expect((await call('/api/bitcoin-signals/evidence', { method: 'POST', body: EVIDENCE, token: reader.token })).status).toBe(403);
+  it('cannot be bypassed by a second administrator granting ordinary memberships', async () => {
+    const owner = await seedOwner();
+    const second = await seedUser({ admin: true });
+    const member = await seedUser();
+    for (const user of [second, member]) {
+      for (const access of ['read', 'write']) {
+        expect((await call(`/api/admin/users/${user.id}/memberships`, {
+          method: 'POST', token: second.token, body: { app_id: 'bitcoin-signals', access },
+        })).status).toBe(200);
+        expect((await call('/api/apps/bitcoin-signals/resources/market/records', { token: user.token })).status).toBe(403);
+        for (const path of ['radar', 'arbitrage', 'evidence', 'settings', 'status', 'export?dataset=evidence']) {
+          expect((await call(`/api/bitcoin-signals/${path}`, { token: user.token })).status).toBe(403);
+        }
+        expect((await call('/api/bitcoin-signals/refresh', { method: 'POST', token: user.token, body: { scope: 'all' } })).status).toBe(403);
+        expect((await call('/api/bitcoin-signals/settings', { method: 'PATCH', token: user.token, body: { notifications: { enabled: true, email_to: 'offline@example.test' } } })).status).toBe(403);
+        expect((await call('/api/bitcoin-signals/backup-attestation', { method: 'POST', token: user.token, body: {} })).status).toBe(403);
+        expect((await call('/api/admin/projects/bitcoin-signals/status', { token: second.token })).status).toBe(403);
+      }
+    }
+    expect((await call('/api/bitcoin-signals/radar', { token: owner.token })).status).toBe(200);
+    expect((await call('/api/admin/projects/bitcoin-signals/status', { token: owner.token })).status).toBe(200);
+    expect((await bindings.BTC_SIGNALS.prepare("SELECT value_json FROM bs_settings WHERE key='alerts.notifications'").first<{value_json:string}>())!.value_json).toContain('"enabled":false');
+    expect(Number((await bindings.BTC_SIGNALS.prepare('SELECT COUNT(*) n FROM bs_collection_runs').first<{n:number}>())!.n)).toBe(0);
   });
+
+  it('keeps second-admin CFLab privileges while withholding Signals research status', async () => {
+    const second = await seedUser({ admin: true });
+    expect((await call('/api/admin/users', { token: second.token })).status).toBe(200);
+    for (const path of ['/api/admin/apps', '/api/admin/projects', '/api/admin/apps/top-hat-ferals', '/api/admin/projects/top-hat-ferals/status']) {
+      expect((await call(path, { token: second.token })).status).toBe(200);
+    }
+    const denied = await call('/api/admin/projects/bitcoin-signals/status', { token: second.token });
+    expect(denied.status).toBe(403);
+    expect(await denied.text()).not.toMatch(/observations|source_id|collection|alerts_open|funding/);
+    expect((await call('/api/admin/apps/top-hat-ferals', { method: 'PATCH', token: second.token, body: { name: 'Top Hat Ferals' } })).status).toBe(200);
+  });
+
+  it('blocks valid machine tokens and non-owner sessions on generic Signals data routes', async () => {
+    const owner = await seedOwner();
+    const second = await seedUser({ admin: true });
+    const issued = await call('/api/admin/apps/bitcoin-signals/tokens', {
+      method: 'POST', token: second.token, body: { name: 'offline regression only', scopes: ['records:read'] },
+    });
+    expect(issued.status).toBe(201);
+    const machine = await json<{ token: string }>(issued);
+    for (const path of ['/api/apps/bitcoin-signals', '/api/apps/bitcoin-signals/resources/market/records',
+      '/api/apps/bitcoin-signals/files', '/api/apps/bitcoin-signals/proxy/test']) {
+      expect((await call(path, { token: second.token })).status).toBe(403);
+      expect((await call(path, { token: machine.token })).status).toBe(401);
+    }
+    expect((await call('/api/bitcoin-signals/radar', { token: machine.token })).status).toBe(401);
+    expect((await call('/api/apps/bitcoin-signals', { token: owner.token })).status).toBe(200);
+    expect((await call('/api/apps/top-hat-ferals', { token: second.token })).status).toBe(200);
+  });
+
+  it('ignores mutable project ownership claims and forged membership or identity headers', async () => {
+    const owner = await seedOwner();
+    const second = await seedUser({ admin: true, access: 'write' });
+    const saved = await bindings.DB.prepare("SELECT config_json FROM apps WHERE id='bitcoin-signals'").first<{config_json:string}>();
+    try {
+      expect((await call('/api/admin/apps/bitcoin-signals', { method: 'PATCH', token: second.token,
+        body: { config: { ownerUserId: second.id, owner: second.id, is_admin: true, private: false } } })).status).toBe(200);
+      const response = await production.fetch(new Request(`${base}/api/bitcoin-signals/radar`, {
+        headers: { Authorization: `Bearer ${second.token}`, 'X-User-Id': owner.id, 'X-Admin': 'true', 'X-Project-Access': 'write' },
+      }), bindings);
+      expect(response.status).toBe(403);
+      expect((await call('/api/bitcoin-signals/radar', { token: owner.token })).status).toBe(200);
+    } finally {
+      await bindings.DB.prepare("UPDATE apps SET config_json=? WHERE id='bitcoin-signals'").bind(saved!.config_json).run();
+    }
+  });
+
 });
 
 describe('evidence provenance and review', () => {
   it('counts the effect on each hypothesis rather than the overall evidence direction', async () => {
-    const writer = await seedUser({ access: 'write' });
+    const writer = await seedOwner();
     await call('/api/bitcoin-signals/evidence', { method: 'POST', token: writer.token,
       body: { ...EVIDENCE, hypotheses: [{ id: 'sovereign-downstream', effect: 'contradicts' }] } });
     const radar = await json<{ hypotheses: { id: string; evidence: { supports: number; contradicts: number } }[] }>(await call('/api/bitcoin-signals/radar', { token: writer.token }));
@@ -143,7 +211,7 @@ describe('evidence provenance and review', () => {
   });
 
   it('validates the entire evidence patch before saving a summary', async () => {
-    const writer = await seedUser({ access: 'write' });
+    const writer = await seedOwner();
     const created = await json<{ evidence: { id: string } }>(await call('/api/bitcoin-signals/evidence', { method: 'POST', token: writer.token, body: EVIDENCE }));
     const response = await call(`/api/bitcoin-signals/evidence/${created.evidence.id}`, { method: 'PATCH', token: writer.token,
       body: { summary: 'must not be saved', review_status: 'invalid' } });
@@ -152,7 +220,7 @@ describe('evidence provenance and review', () => {
     expect(row?.summary).toBe(EVIDENCE.summary);
   });
   it('retains source, timestamps, and review attribution', async () => {
-    const writer = await seedUser({ access: 'write' });
+    const writer = await seedOwner();
     const created = await call('/api/bitcoin-signals/evidence', { method: 'POST', body: EVIDENCE, token: writer.token });
     expect(created.status).toBe(201);
     const createdBody = await json<{ evidence: { id: string; retrieved_at: string; source_url: string } }>(created);
@@ -183,7 +251,7 @@ describe('evidence provenance and review', () => {
   });
 
   it('rejects a duplicate entry, an invalid URL, and unknown hypotheses', async () => {
-    const writer = await seedUser({ access: 'write' });
+    const writer = await seedOwner();
     expect((await call('/api/bitcoin-signals/evidence', { method: 'POST', body: EVIDENCE, token: writer.token })).status).toBe(201);
     expect((await call('/api/bitcoin-signals/evidence', { method: 'POST', body: EVIDENCE, token: writer.token })).status).toBe(409);
     expect((await call('/api/bitcoin-signals/evidence', { method: 'POST', body: { ...EVIDENCE, title: 'Another', source_url: 'http://example.gov/x' }, token: writer.token })).status).toBe(400);
@@ -192,7 +260,7 @@ describe('evidence provenance and review', () => {
   });
 
   it('searches and filters without becoming a SQL surface', async () => {
-    const writer = await seedUser({ access: 'write' });
+    const writer = await seedOwner();
     await call('/api/bitcoin-signals/evidence', { method: 'POST', body: EVIDENCE, token: writer.token });
     await call('/api/bitcoin-signals/evidence', {
       method: 'POST', token: writer.token,
@@ -234,7 +302,7 @@ describe('storage separation', () => {
   });
 
   it('reads observations only from the assigned database', async () => {
-    const admin = await seedUser({ admin: true });
+    const admin = await seedOwner();
     await seedObservation('spot_price_usd', 80_123.45, '2026-10-25T12:00:00.000Z', 'coinbase');
     const radar = await json<{ indicators: { series: string; venue: string; value: number }[] }>(await call('/api/bitcoin-signals/radar', { token: admin.token }));
     const spot = radar.indicators.find(indicator => indicator.series === 'spot_price_usd' && indicator.venue === 'coinbase');
@@ -282,13 +350,13 @@ describe('CFLab administration screens', () => {
 
 describe('arbitrage calculations through the API', () => {
   it('does not invent cumulative income from sampled quotes', async () => {
-    const admin = await seedUser({ admin: true });
+    const admin = await seedOwner();
     await seedObservation('funding_current_8h', 0.0001, new Date(Date.now() - 30 * 60_000).toISOString());
     const view = await json<{ venues: { persistence: { basis: string; cumulative_pct: number | null } }[] }>(await call('/api/bitcoin-signals/arbitrage', { token: admin.token }));
     expect(view.venues[0]?.persistence).toMatchObject({ basis: 'sampled', cumulative_pct: null });
   });
   it('computes normalized funding, carry after costs, basis, and persistence', async () => {
-    const admin = await seedUser({ admin: true });
+    const admin = await seedOwner();
     const at = new Date(Date.now() - 30 * 60_000).toISOString();
     await seedObservation('funding_current_8h', 0.0005, at, 'okx');
     await seedObservation('index_price_usd', 80_000, at, 'okx');
@@ -326,7 +394,7 @@ describe('arbitrage calculations through the API', () => {
   });
 
   it('honours operator assumptions in the query without storing them', async () => {
-    const admin = await seedUser({ admin: true });
+    const admin = await seedOwner();
     await seedObservation('funding_current_8h', 0.0001, new Date(Date.now() - 30 * 60_000).toISOString(), 'okx');
     const cheap = await json<{ venues: { carry: { net_apr_pct: number } }[] }>(await call('/api/bitcoin-signals/arbitrage?fee_bps=0&slippage_bps=0&legs=2&holding_days=1', { token: admin.token }));
     const expensive = await json<{ venues: { carry: { net_apr_pct: number } }[] }>(await call('/api/bitcoin-signals/arbitrage?fee_bps=50&slippage_bps=50&legs=4&holding_days=1', { token: admin.token }));
@@ -339,7 +407,7 @@ describe('arbitrage calculations through the API', () => {
 
 describe('operator settings, refresh, backup, and export', () => {
   it('rejects the entire settings patch before enabling notifications if another field is invalid', async () => {
-    const admin = await seedUser({ admin: true });
+    const admin = await seedOwner();
     const response = await call('/api/bitcoin-signals/settings', { method: 'PATCH', token: admin.token,
       body: { notifications: { enabled: true, email_to: 'research@example.com' }, assumptions: { legs: 0 } } });
     expect(response.status).toBe(400);
@@ -348,7 +416,7 @@ describe('operator settings, refresh, backup, and export', () => {
   });
 
   it('expires an attestation when the actual backups age out', async () => {
-    const admin = await seedUser({ admin: true });
+    const admin = await seedOwner();
     const capturedAt = new Date(Date.now() - 29 * 3_600_000).toISOString();
     const report = ['cflab', 'cflab-analytics', 'cflab-bitcoin-signals'].map(database => ({ database, status: 'fresh', captured_at: capturedAt }));
     const response = await call('/api/bitcoin-signals/backup-attestation', { method: 'POST', token: admin.token, body: { max_age_hours: 30, report } });
@@ -358,7 +426,7 @@ describe('operator settings, refresh, backup, and export', () => {
     expect((await backupView(bindings.BTC_SIGNALS, new Date(Date.now() + 2 * 3_600_000))).ok).toBe(false);
   });
   it('keeps notifications off by default and validates any change', async () => {
-    const admin = await seedUser({ admin: true });
+    const admin = await seedOwner();
     const initial = await json<{ notifications: { enabled: boolean } }>(await call('/api/bitcoin-signals/settings', { token: admin.token }));
     expect(initial.notifications.enabled).toBe(false);
     const noRecipient = await call('/api/bitcoin-signals/settings', {
@@ -389,7 +457,7 @@ describe('operator settings, refresh, backup, and export', () => {
   });
 
   it('runs an administrator refresh and records the outcome, even when every source fails', async () => {
-    const admin = await seedUser({ admin: true });
+    const admin = await seedOwner();
     vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 500, headers: { 'content-type': 'application/json' } })));
     const response = await call('/api/bitcoin-signals/refresh', { method: 'POST', body: { scope: 'hourly' }, token: admin.token });
     expect(response.status).toBe(200);
@@ -404,7 +472,7 @@ describe('operator settings, refresh, backup, and export', () => {
   });
 
   it('rejects an unvalidated backup attestation and records a complete one', async () => {
-    const admin = await seedUser({ admin: true });
+    const admin = await seedOwner();
     const incomplete = await call('/api/bitcoin-signals/backup-attestation', {
       method: 'POST', token: admin.token,
       body: { ok: true, max_age_hours: 30, report: [{ database: 'cflab', status: 'fresh' }] },
@@ -428,7 +496,7 @@ describe('operator settings, refresh, backup, and export', () => {
   });
 
   it('exports bounded CSV and rejects an unknown dataset', async () => {
-    const admin = await seedUser({ admin: true });
+    const admin = await seedOwner();
     await seedObservation('spot_price_usd', 80_000, new Date(Date.now() - 60_000).toISOString(), 'coinbase');
     const observations = await call('/api/bitcoin-signals/export?dataset=observations&series=spot_price_usd', { token: admin.token });
     expect(observations.status).toBe(200);
@@ -444,7 +512,7 @@ describe('operator settings, refresh, backup, and export', () => {
 
 describe('CFLab administration integration', () => {
   it('lists the project with its storage backend and dashboard', async () => {
-    const admin = await seedUser({ admin: true });
+    const admin = await seedOwner();
     const projects = await json<{ projects: { id: string; storage: { backend: string; binding: string; migrations_dir: string }; dashboard: string | null }[] }>(
       await call('/api/admin/projects', { token: admin.token }));
     const signals = projects.projects.find(project => project.id === 'bitcoin-signals')!;
@@ -455,7 +523,7 @@ describe('CFLab administration integration', () => {
   });
 
   it('reports collection health, freshness, and backup status for the project', async () => {
-    const admin = await seedUser({ admin: true });
+    const admin = await seedOwner();
     const status = await json<{
       project: { storage: { backend: string; binding: string; reachable: boolean; registered: boolean } };
       collection: { sources: { source_id: string; cadence: string }[] };
@@ -470,7 +538,7 @@ describe('CFLab administration integration', () => {
   });
 
   it('does not expose another project as a data browser', async () => {
-    const admin = await seedUser({ admin: true });
+    const admin = await seedOwner();
     await bindings.DB.prepare("INSERT INTO apps (id, name, active, config_json, created_at, updated_at) VALUES ('plain-app', 'Plain', 1, '{}', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')").run();
     const status = await json<{ project: { app_id: string; storage: { backend: string } }; data?: unknown; collection?: unknown }>(
       await call('/api/admin/projects/plain-app/status', { token: admin.token }));
@@ -482,7 +550,7 @@ describe('CFLab administration integration', () => {
   });
 
   it('keeps the existing app and user administration unchanged', async () => {
-    const admin = await seedUser({ admin: true });
+    const admin = await seedOwner();
     const created = await call('/api/admin/apps', { method: 'POST', token: admin.token, body: { id: 'compat-app', name: 'Compat', origins: ['https://client.example'] } });
     expect(created.status).toBe(201);
     const listed = await json<{ apps: { id: string; storage: { binding: string }; storage_backend?: string }[] }>(await call('/api/admin/apps', { token: admin.token }));

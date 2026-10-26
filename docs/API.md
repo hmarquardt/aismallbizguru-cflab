@@ -154,6 +154,10 @@ Response is the approved upstream content with HTTP 200 (no JSON wrapper). Inval
 
 ## Administration
 
+Bitcoin Signals research/status additionally requires the pinned operator identity
+from `src/projects.ts`; global administrator status or membership does not grant
+access to it. Ordinary CFLab administration remains unchanged.
+
 Administration requires an active human session whose user has `is_admin = true` (`Authorization: Bearer <cflu_...>`). The **local entrypoint** additionally accepts `Authorization: Bearer <DEV_ADMIN_TOKEN>` on a loopback host with no Origin header. Machine app tokens can never use these routes. All JSON responses, including initial token creation, are `no-store`. The first administrator is created by operator bootstrap, not by an API ([AUTH.md](AUTH.md#first-admin-bootstrap)).
 
 | Method/path under `/api/admin` | Body / response |

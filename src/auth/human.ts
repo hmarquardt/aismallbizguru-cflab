@@ -1,6 +1,8 @@
 import type { MiddlewareHandler } from 'hono';
 import type { Bindings, ContextEnv, HumanUser, Membership, Scope, UserRow } from '../types';
 import { ApiError } from '../http';
+import { BITCOIN_SIGNALS } from '../projects';
+import { requireSignalsOwner } from '../bitcoin-signals/access';
 import { hashToken, randomHex } from './crypto';
 
 export const HUMAN_TOKEN_PREFIX = 'cflu_';
@@ -142,6 +144,9 @@ export async function membershipsFor(db: D1Database, userId: string): Promise<Me
   return results.map(row => ({ app_id: row.app_id, access: row.access }));
 }
 export async function appScopesFor(env: Bindings, user: HumanUser, appId: string): Promise<Scope[]> {
+  // Only this private project overrides normal admin/membership access. This
+  // also closes the generic record/file/proxy surface for its project identity.
+  if (appId === BITCOIN_SIGNALS.appId) requireSignalsOwner(user);
   if (user.is_admin) return WRITE_SCOPES;
   const row = await env.DB.prepare('SELECT access FROM project_memberships WHERE user_id = ? AND app_id = ?')
     .bind(user.id, appId).first<{ access: 'read' | 'write' }>();

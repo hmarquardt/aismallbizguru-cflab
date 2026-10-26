@@ -3,6 +3,7 @@ import type { ContextEnv, Scope } from '../types';
 import { ApiError, invalid, strings } from '../http';
 import { hashToken, randomHex } from './crypto';
 import { HUMAN_TOKEN_PATTERN, appScopesFor, sessionUser } from './human';
+import { BITCOIN_SIGNALS } from '../projects';
 
 export { hashToken } from './crypto';
 
@@ -27,6 +28,9 @@ export const authenticate: MiddlewareHandler<ContextEnv> = async (c, next) => {
     c.set('scopes', effective);
     await next();
     return;
+  }
+  if (c.get('app').id === BITCOIN_SIGNALS.appId) {
+    throw new ApiError(401, 'unauthorized', 'A human owner session is required for Bitcoin Signals');
   }
   const match = /^Bearer (cfl_[0-9a-f]{64})$/i.exec(header);
   if (!match?.[1]) throw new ApiError(401, 'unauthorized', 'Invalid or missing bearer token');

@@ -11,6 +11,7 @@ import { projectStatus } from '../../src/bitcoin-signals/status';
 import { createSession } from '../../src/auth/human';
 import production from '../../src/index';
 import { NOW, stubFetch } from './fixtures';
+import { BITCOIN_SIGNALS } from '../../src/projects';
 
 const bindings = env as unknown as Bindings & {
   TEST_MIGRATIONS: { name: string; queries: string[] }[];
@@ -57,7 +58,7 @@ it('a legacy active registry row cannot enable collection or misreport source st
     const result = await runCollectionJob(bindings, 'hourly', { trigger: 'manual', now: NOW, fetchImpl: fetchImpl as typeof fetch, skipAlerts: true });
     expect(result.sources.some(source => source.source_id === 'deribit')).toBe(false);
     expect(fetchImpl.mock.calls).toHaveLength(8);
-    const id = crypto.randomUUID();
+    const id = BITCOIN_SIGNALS.ownerUserId;
     const at = new Date().toISOString();
     await bindings.DB.prepare('INSERT INTO users (id, email, active, is_admin, created_at, updated_at) VALUES (?, ?, 1, 1, ?, ?)')
       .bind(id, `${id}@example.test`, at, at).run();

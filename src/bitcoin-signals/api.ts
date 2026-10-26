@@ -1,15 +1,15 @@
 // Bitcoin Signals HTTP API.
 //
-// Authorization reuses CFLab identity and project memberships: a human session is
-// validated against the primary database, and access to this project comes from
-// `project_memberships` (or is_admin). All project data is then read from and
-// written to the BTC_SIGNALS binding only. Operator actions (settings, manual
-// refresh, backup attestation, export) require an administrator.
+// Authorization reuses CFLab identity: a human session is
+// validated against the primary database, then pinned to the existing operator's
+// immutable user ID. Global-admin status or membership alone grants no access.
+// All research data uses BTC_SIGNALS. The owner retains the existing
+// administrator operations (settings, refresh, backup attestation and export).
 
 import { Hono } from 'hono';
 import type { ContextEnv, HumanUser } from '../types';
 import { ApiError, fields, invalid, jsonBody, string } from '../http';
-import { HUMAN_TOKEN_PATTERN, appScopesFor, sessionUser } from '../auth/human';
+import { HUMAN_TOKEN_PATTERN, sessionUser } from '../auth/human';
 import { hashToken } from '../auth/crypto';
 import { BITCOIN_SIGNALS } from '../projects';
 import { DEFAULT_ASSUMPTIONS, validateAssumptions, type CarryAssumptions } from './market';
@@ -19,6 +19,7 @@ import {
   EVIDENCE_FILTERS, arbitrageView, evidenceList, exportEvidenceCsv, exportObservationsCsv, radarView,
 } from './queries';
 import { projectStatus } from './status';
+import { requireSignalsOwner } from './access';
 import { SERIES } from './sources';
 import { SOURCE_POLICY, isSourceEnabled } from './policy';
 
@@ -30,12 +31,11 @@ signals.use('*', async (c, next) => {
   const token = /^Bearer\s+(\S+)$/i.exec(c.req.header('Authorization') ?? '')?.[1];
   if (!token || !HUMAN_TOKEN_PATTERN.test(token)) throw new ApiError(401, 'unauthorized', 'A human session is required');
   const user = await sessionUser(c.env, token);
+  requireSignalsOwner(user);
   const project = await c.env.DB.prepare('SELECT id FROM apps WHERE id = ? AND active = 1').bind(BITCOIN_SIGNALS.appId).first();
   if (!project) throw new ApiError(404, 'app_not_found', 'App not found');
-  // Throws 403 when the user is neither an administrator nor a member.
-  const scopes = await appScopesFor(c.env, user, BITCOIN_SIGNALS.appId);
   c.set('user', user);
-  c.set('projectAccess', scopes.includes('records:write') ? 'write' : 'read');
+  c.set('projectAccess', 'write');
   await next();
 });
 

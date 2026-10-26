@@ -129,6 +129,9 @@ export async function storageHealth(env: Bindings, appId: string): Promise<Stora
 // database (migration 0011), its data in BTC_SIGNALS.
 export const BITCOIN_SIGNALS = {
   appId: 'bitcoin-signals',
+  // Existing operator identity, not a credential. Memberships and mutable email
+  // addresses never confer access to this private research project.
+  ownerUserId: 'b8298e8d-9798-4622-ae4c-2f68d05e7fc7',
   name: 'Bitcoin Signals',
   dashboardPath: '/bitcoin-signals',
   backend: STORAGE_BACKENDS['bitcoin-signals'],

@@ -6,6 +6,7 @@ import { sourceInput } from '../proxy/policy';
 import { adminUsers } from './admin-users';
 import { BITCOIN_SIGNALS, STORAGE_BACKENDS, storageBackendForBinding, storageHealth } from '../projects';
 import { projectStatus } from '../bitcoin-signals/status';
+import { requireSignalsOwner } from '../bitcoin-signals/access';
 
 // Storage is reported from the explicit allowlist in src/projects.ts. A registry
 // row naming an unknown binding is reported as unknown rather than resolved.
@@ -79,7 +80,10 @@ admin.get('/projects/:app/status', async c => {
   const app = await c.env.DB.prepare('SELECT id, name, active FROM apps WHERE id = ?').bind(appId)
     .first<{ id: string; name: string; active: number }>();
   if (!app) throw new ApiError(404, 'app_not_found', 'App not found');
-  if (appId === BITCOIN_SIGNALS.appId) return c.json(await projectStatus(c.env));
+  if (appId === BITCOIN_SIGNALS.appId) {
+    requireSignalsOwner(c.get('user'));
+    return c.json(await projectStatus(c.env));
+  }
   const storage = await storageHealth(c.env, appId);
   return c.json({
     generated_at: new Date().toISOString(),

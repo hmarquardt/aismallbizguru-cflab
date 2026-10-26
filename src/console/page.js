@@ -465,8 +465,25 @@ const SCRIPT = `
       if(panel)panel.hidden=!active;
     }
     if(updateHash!==false)history.replaceState(null,'','#'+name);
-    if(!state.loaded[name]){ state.loaded[name]=true; loaders[name]() }
+    scrollToTop();
+    if(!state.loaded[name]){
+      state.loaded[name]=true;
+      try{ var pending=loaders[name](); if(pending&&pending.catch)pending.catch(function(error){ reportPanelError(name,error) }) }
+      catch(error){ reportPanelError(name,error) }
+    }
   }
+  // A tab switch must not leave the viewport scrolled past the (now shorter)
+  // panel, and a render failure must be visible in the panel instead of leaving
+  // an apparently blank page.
+  function scrollToTop(){ try{ window.scrollTo(0,0) }catch(e){} }
+  function reportPanelError(name,error){
+    var target=document.getElementById(name==='overview'?'overview-warnings':name);
+    if(!target)return;
+    var message=error&&error.message?error.message:'The section could not be loaded';
+    target.innerHTML='<div class="warning error"><span class="badge badge-bad">error</span><div>'+esc(message)+'</div></div>';
+  }
+  window.addEventListener('error',function(event){ reportPanelError(state.tab,event.error||{message:event.message}) });
+  window.addEventListener('unhandledrejection',function(event){ reportPanelError(state.tab,event.reason) });
   (function wire(){
     var tabs=document.querySelectorAll('[role=tab]');
     function bind(btn,index){

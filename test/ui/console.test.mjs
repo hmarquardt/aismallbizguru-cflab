@@ -93,7 +93,7 @@ async function waitFor(check, label = 'condition') {
   throw new Error(`timed out waiting for ${label}`);
 }
 
-function launch({ me = { user: { email: 'admin@example.com', is_admin: true } }, url = `${ORIGIN}/` } = {}) {
+function launch({ me = { user: { email: 'admin@example.com', is_admin: true } }, url = `${ORIGIN}/`, fail = [] } = {}) {
   const window = new Window({ url });
   const html = consolePage().replace(/<script>[\s\S]*<\/script>/, '');
   window.document.write(html);
@@ -105,6 +105,7 @@ function launch({ me = { user: { email: 'admin@example.com', is_admin: true } },
     const method = (init.method ?? 'GET').toUpperCase();
     const path = new URL(target, url).pathname;
     calls.push(`${method} ${path}`);
+    if (fail.includes(path)) return response({ error: { code: 'internal_error', message: 'Internal server error' } }, 500);
     if (init.body) bodies.push({ path, body: JSON.parse(init.body) });
     if (path === '/api/auth/me') return me.status ? response(me.body, me.status) : response(me);
     if (path === '/api/admin/console/overview') return response(overview());
@@ -233,6 +234,16 @@ test('the workbench runs a read-only query, pages, and never calls another origi
 
   // Every request in this session stays on the console's own origin.
   for (const call of app.calls) assert.match(call, /^(GET|POST|DELETE) \/(api|$)/);
+  app.close();
+});
+
+test('a failing section shows a visible error instead of a blank panel', async () => {
+  const app = launch({ fail: ['/api/admin/console/jobs'] });
+  await waitFor(() => app.document.getElementById('overview-cards').innerHTML.length > 0, 'overview');
+  app.document.getElementById('tabbtn-jobs').click();
+  await waitFor(() => app.document.getElementById('jobs').textContent.includes('Internal server error'), 'jobs error');
+  assert.equal(app.document.getElementById('tab-jobs').hidden, false);
+  assert.match(app.document.getElementById('jobs').innerHTML, /msg-error/);
   app.close();
 });
 

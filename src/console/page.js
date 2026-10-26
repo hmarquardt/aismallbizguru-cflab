@@ -140,6 +140,7 @@ const CONSOLE_BODY = `
       <div class="panel-head"><div><h2 id="repos-title">Repositories</h2><p>Authoritative source for these deployments.</p></div></div>
       <div id="repos" class="kv"></div>
     </section>
+  </section>
   <section id="tab-databases" role="tabpanel" aria-labelledby="tabbtn-databases" tabindex="0" hidden>
     <div class="page-head"><div><h1>Databases</h1><p class="lede">Allowlisted D1 databases only. Statements are executed read-only with bounded rows and are audited by hash.</p></div></div>
     <section class="panel" aria-labelledby="db-pick-title">

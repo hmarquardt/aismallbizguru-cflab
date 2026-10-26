@@ -147,6 +147,22 @@ test('the console shell is accessible, responsive and free of external assets', 
   assert.match(html, /@media \(max-width:720px\)/);
 });
 
+test('every tab panel is a direct child of main so hiding one cannot hide another', () => {
+  const window = new Window({ url: `${ORIGIN}/` });
+  window.document.write(consolePage().replace(/<script>[\s\S]*<\/script>/, ''));
+  const document = window.document;
+  const panels = [...document.querySelectorAll('[role="tabpanel"]')];
+  assert.equal(panels.length, 5);
+  for (const panel of panels) {
+    assert.equal(panel.parentElement.id, 'main', `${panel.id} must be a sibling under main`);
+    assert.equal(panel.querySelectorAll('[role="tabpanel"]').length, 0, `${panel.id} must not contain another panel`);
+  }
+  // Markup balance: an unclosed section would nest the later tabs inside an earlier one.
+  const body = consolePage().slice(consolePage().indexOf('<body>'), consolePage().lastIndexOf('<script>'));
+  assert.equal((body.match(/<section\b/g) || []).length, (body.match(/<\/section>/g) || []).length);
+  window.close();
+});
+
 test('an anonymous visitor follows the existing sign-in flow', async () => {
   const app = launch({ me: { status: 401, body: { error: { code: 'unauthorized' } } } });
   await waitFor(() => app.window.location.href.includes('/admin/login'), 'redirect to sign in');

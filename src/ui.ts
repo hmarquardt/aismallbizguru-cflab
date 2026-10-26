@@ -146,6 +146,8 @@ input:disabled,select:disabled{background:var(--surface-muted);color:var(--muted
 // a small white circuit trace inside. Inlined as a data URI so no page, Worker or
 // browser makes a favicon request; the geometry reads at 16x16 and 32x32.
 const FAVICON_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><path fill="#F38020" d="M12.5 5v7.5L6.6 24.2A2.6 2.6 0 0 0 9 28h14a2.6 2.6 0 0 0 2.4-3.8L19.5 12.5V5z"/><path fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M11.4 23.4h2.3m7.9-.9 2.2-2.2"/><circle cx="16" cy="23.4" r="3" fill="#FFFFFF"/><circle cx="21.4" cy="20.3" r="1.5" fill="#FFFFFF"/></svg>';
+import { CLIENT_NAVIGATION_JS } from './navigation';
+
 const FAVICON = '<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,' + encodeURIComponent(FAVICON_SVG).replace(/\(/g, '%28').replace(/\)/g, '%29').replace(/'/g, '%27') + '">';
 
 const API_JS = `var SESSION_KEY='cflab_session';function sessionToken(){return sessionStorage.getItem(SESSION_KEY)}function setSession(t){if(t)sessionStorage.setItem(SESSION_KEY,t);else sessionStorage.removeItem(SESSION_KEY)}function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}function formatId(id){return String(id||'').split(/[-_]/).filter(Boolean).map(function(p){return p.charAt(0).toUpperCase()+p.slice(1)}).join(' ')}function show(id,text,kind){var el=document.getElementById(id);if(!el)return;el.textContent=text||'';el.className='msg'+(kind==='err'?' msg-error':kind==='ok'?' msg-success':kind?' msg-info':'')}function api(path,method,body){var headers={};if(body!==undefined)headers['Content-Type']='application/json';var t=sessionToken();if(t)headers['Authorization']='Bearer '+t;return fetch(path,{method:method||'GET',headers:headers,body:body===undefined?undefined:JSON.stringify(body)}).then(function(res){return res.json().catch(function(){return null}).then(function(data){if(!res.ok){var e=new Error((data&&data.error&&data.error.message)||('HTTP '+res.status));e.status=res.status;e.code=data&&data.error&&data.error.code;throw e}return data})})}function initNav(user){var a=document.getElementById('nav-admin');if(a&&user&&user.is_admin)a.hidden=false}function wireLogout(){var b=document.getElementById('logout');if(!b)return;b.addEventListener('click',function(){api('/api/auth/logout','POST',{}).then(function(){setSession(null);location.href='/admin/login'},function(){setSession(null);location.href='/admin/login'})})}`;
@@ -154,7 +156,7 @@ function plainShell(title: string, content: string, script: string): string {
   return '<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">' + FAVICON + '<title>' + title + ' - CFLab</title><style>' + STYLE + '</style></head><body class="auth-page"><div class="auth-wrap"><main class="auth-card"><div class="brand-block"><span class="brand-mark">CFLab</span><span class="brand-sub">AI Small Biz Guru</span></div><h1>' + title + '</h1>' + content + '</main></div><script>' + API_JS + script + '</script></body></html>';
 }
 function appShell(title: string, lede: string, content: string, script: string): string {
-  return '<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">' + FAVICON + '<title>' + title + ' - CFLab</title><style>' + STYLE + '</style></head><body><header class="app-header"><div class="app-header-inner"><a class="brand" href="/account">CFLab</a><nav class="nav" aria-label="Account"><a id="nav-admin" href="/admin/users" hidden>Admin users</a><a href="/bitcoin-signals">Bitcoin Signals</a><a href="/account">Account</a><button id="logout" class="btn btn-secondary btn-small" type="button">Log out</button></nav></div></header><main class="container"><div class="page-head"><h1>' + title + '</h1><p class="lede">' + lede + '</p></div>' + content + '</main><script>' + API_JS + script + '</script></body></html>';
+  return '<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">' + FAVICON + '<title>' + title + ' - CFLab</title><style>' + STYLE + '</style></head><body><header class="app-header"><div class="app-header-inner"><a class="brand" href="/">CFLab</a><nav class="nav" aria-label="Account"><a id="nav-admin" href="/admin/users" hidden>Admin users</a><a href="/bitcoin-signals">Bitcoin Signals</a><a href="/account">Account</a><button id="logout" class="btn btn-secondary btn-small" type="button">Log out</button></nav></div></header><main class="container"><div class="page-head"><h1>' + title + '</h1><p class="lede">' + lede + '</p></div>' + content + '</main><script>' + API_JS + script + '</script></body></html>';
 }
 
 export function loginPage(): string {
@@ -171,12 +173,12 @@ export function loginPage(): string {
   <button type="submit" class="btn btn-primary btn-block">Log in</button>
 </form>
 <div id="msg" class="msg" role="status" aria-live="polite"></div>
-<p class="auth-footer"><a href="/forgot-password">Forgot password?</a></p>`, `
+<p class="auth-footer"><a href="/forgot-password">Forgot password?</a></p>`, CLIENT_NAVIGATION_JS + `
 document.getElementById('login-form').addEventListener('submit',function(e){
   e.preventDefault();
   show('msg','Signing in...','');
   api('/api/auth/login','POST',{email:document.getElementById('email').value,password:document.getElementById('password').value})
-    .then(function(data){setSession(data.token);location.href=data.user.is_admin?'/admin/users':'/account'})
+    .then(function(data){setSession(data.token);location.href=loginDestination(data.user,location.search)})
     .catch(function(err){show('msg',err.message,'err')});
 });`);
 }
@@ -273,7 +275,7 @@ function renderProfile(data){
     +'<div class="meta-item"><div class="meta-label">Role</div><div class="meta-value">'+role+'</div></div>'
     +'<div class="meta-item"><div class="meta-label">Projects</div><div class="meta-value chips">'+projects+'</div></div>';
 }
-api('/api/auth/me').then(function(data){renderProfile(data);initNav(data.user);wireLogout()},function(){setSession(null);location.href='/admin/login'});
+api('/api/auth/me').then(function(data){renderProfile(data);initNav(data.user);wireLogout()},function(){setSession(null);location.href='/admin/login?next='+encodeURIComponent(location.pathname)});
 document.getElementById('pw-form').addEventListener('submit',function(e){
   e.preventDefault();
   var p=document.getElementById('new-password').value;
@@ -409,5 +411,5 @@ api('/api/auth/me').then(function(data){
   document.getElementById('me').textContent='Signed in as '+data.user.email;
   load();
   loadProjects();
-},function(){setSession(null);location.href='/admin/login'});`);
+},function(){setSession(null);location.href='/admin/login?next='+encodeURIComponent(location.pathname)});`);
 }

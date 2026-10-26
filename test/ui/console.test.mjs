@@ -93,7 +93,7 @@ async function waitFor(check, label = 'condition') {
   throw new Error(`timed out waiting for ${label}`);
 }
 
-function launch({ me = { user: { email: 'admin@example.com', is_admin: true } }, url = `${ORIGIN}/`, fail = [] } = {}) {
+function launch({ me = { user: { email: 'admin@example.com', is_admin: true } }, url = `${ORIGIN}/`, fail = [], unauthorized = [] } = {}) {
   const window = new Window({ url });
   const html = consolePage().replace(/<script>[\s\S]*<\/script>/, '');
   window.document.write(html);
@@ -106,6 +106,7 @@ function launch({ me = { user: { email: 'admin@example.com', is_admin: true } },
     const path = new URL(target, url).pathname;
     calls.push(`${method} ${path}`);
     if (fail.includes(path)) return response({ error: { code: 'internal_error', message: 'Internal server error' } }, 500);
+    if (unauthorized.includes(path)) return response({ error: { code: 'unauthorized', message: 'Invalid or expired session' } }, 401);
     if (init.body) bodies.push({ path, body: JSON.parse(init.body) });
     if (path === '/api/auth/me') return me.status ? response(me.body, me.status) : response(me);
     if (path === '/api/admin/console/overview') return response(overview());
@@ -263,6 +264,13 @@ test('a failing section shows a visible error instead of a blank panel', async (
   await waitFor(() => app.document.getElementById('jobs').textContent.includes('Internal server error'), 'jobs error');
   assert.equal(app.document.getElementById('tab-jobs').hidden, false);
   assert.match(app.document.getElementById('jobs').innerHTML, /msg-error/);
+  app.close();
+});
+
+test('an expired console session sends the sign-in page a validated return URL', async () => {
+  const app = launch({ unauthorized: ['/api/admin/console/overview'] });
+  await waitFor(() => app.window.location.href.includes('/admin/login'), 'redirect to sign in');
+  assert.match(app.window.location.href, /\/admin\/login\?next=%2F$/);
   app.close();
 });
 

@@ -95,6 +95,15 @@ Safety rules: only administrators can manage users; project users receive `403`;
 
 The minimal UI (`/admin/login`, `/admin/users`, `/account`, `/forgot-password`, `/reset-password`) stores the session token in `sessionStorage` only, never in URLs or persistent local storage, and contains no embedded credentials.
 
+After a successful sign-in, an administrator is taken to the Control Center at `/`
+and any other user to `/account`. A `next` query parameter is honoured only when it
+is a same-origin path: absolute URLs, protocol-relative values, backslashes, control
+characters, `/api/*`, and the sign-in/recovery pages themselves are discarded and
+the role default applies. The validation runs in `src/navigation.js`, whose source is
+injected into the sign-in page, so the browser and the tests execute the same rules.
+The CFLab brand in the shared header links to `/`; `/account` remains in the header
+navigation.
+
 ## First-admin bootstrap
 
 There is no public signup and no bootstrap HTTP endpoint. The first administrator is created through Cloudflare-account-authenticated operator access to the verified CFLab D1 database, then establishes a password through the normal reset-token machinery.

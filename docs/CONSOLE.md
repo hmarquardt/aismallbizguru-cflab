@@ -48,8 +48,8 @@ is fetched the first time it is selected. A tab is never polled.
 
 * The page is a data-free shell. It reads the existing `cflab_session` token from
   `sessionStorage` (the same token `/admin/users` uses), calls `/api/auth/me`, sends
-  a `401` visitor to `/admin/login`, and sends a signed-in non-administrator to
-  `/account`.
+  a `401` visitor to `/admin/login?next=/` so the sign-in flow can return here, and
+  sends a signed-in non-administrator to `/account`.
 * Every data route lives under `/api/admin/console/*`, which is registered inside
   the existing `/api/admin/*` prefix, so `requireHumanAdmin` runs first. A machine
   token (`cfl_…`), an unknown or expired session, a deactivated account, or a

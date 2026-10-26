@@ -211,12 +211,12 @@ const SCRIPT = `
   function token(){ return sessionStorage.getItem(SESSION_KEY) }
   function esc(value){ return String(value==null?'':value).replace(/[&<>"']/g,function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c] }) }
   function show(id,text,kind){ var el=document.getElementById(id); if(!el)return; el.textContent=text||''; el.className='msg'+(kind==='err'?' msg-error':kind==='ok'?' msg-ok':kind?' msg-info':'') }
-  function signOut(){ sessionStorage.removeItem(SESSION_KEY); location.href='/admin/login' }
+  function signOut(returnTo){ sessionStorage.removeItem(SESSION_KEY); location.href = typeof returnTo === 'string' && returnTo.charAt(0) === '/' ? '/admin/login?next=' + encodeURIComponent(returnTo) : '/admin/login' }
   function api(path,method,body){
     var headers={}; if(body!==undefined)headers['Content-Type']='application/json';
     var t=token(); if(t)headers['Authorization']='Bearer '+t;
     return fetch(path,{method:method||'GET',headers:headers,body:body===undefined?undefined:JSON.stringify(body)}).then(function(res){
-      if(res.status===401){ signOut(); throw new Error('Sign in required') }
+      if(res.status===401){ signOut(location.pathname); throw new Error('Sign in required') }
       if(res.status===403){ location.href='/account'; throw new Error('Administrator access required') }
       return res.text().then(function(text){
         var data=null; try{ data=text?JSON.parse(text):null }catch(e){ data=null }
@@ -428,7 +428,7 @@ const SCRIPT = `
     show('db-msg','Preparing CSV…','info');
     return fetch('/api/admin/console/databases/'+encodeURIComponent(state.databaseId)+'/export',{method:'POST',headers:headers,body:JSON.stringify({sql:document.getElementById('sql').value})})
       .then(function(res){
-        if(res.status===401){ signOut(); throw new Error('Sign in required') }
+        if(res.status===401){ signOut(location.pathname); throw new Error('Sign in required') }
         if(!res.ok){ return res.text().then(function(text){
           var data=null; try{ data=text?JSON.parse(text):null }catch(e){ data=null }
           throw new Error((data&&data.error&&data.error.message)||('HTTP '+res.status));

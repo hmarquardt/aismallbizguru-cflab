@@ -78,7 +78,7 @@ textarea{min-height:82px;resize:vertical}
 `;
 
 const SHELL = `<header class="app-header"><div class="app-header-inner">
-<a class="brand" href="/account">CFLab</a>
+<a class="brand" href="/">CFLab</a>
 <nav class="nav" aria-label="Sections">
 <button class="tab" type="button" id="tab-radar" data-tab="radar" aria-selected="true">Radar</button>
 <button class="tab" type="button" id="tab-arbitrage" data-tab="arbitrage" aria-selected="false">Arbitrage</button>
@@ -169,7 +169,7 @@ var state={caller:null,radar:null,arbitrage:null,evidence:null,settings:null};
 function sessionToken(){return sessionStorage.getItem(SESSION_KEY)}
 function setSession(t){if(t)sessionStorage.setItem(SESSION_KEY,t);else sessionStorage.removeItem(SESSION_KEY)}
 function esc(s){return String(s===null||s===undefined?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
-function api(path,method,body){var headers={};if(body!==undefined)headers['Content-Type']='application/json';var t=sessionToken();if(t)headers['Authorization']='Bearer '+t;return fetch(path,{method:method||'GET',headers:headers,body:body===undefined?undefined:JSON.stringify(body)}).then(function(res){if(res.status===401){setSession(null);location.href='/admin/login';throw new Error('Session expired')}return res.json().catch(function(){return null}).then(function(data){if(!res.ok){var e=new Error((data&&data.error&&data.error.message)||('HTTP '+res.status));e.status=res.status;e.code=data&&data.error&&data.error.code;throw e}return data})})}
+function api(path,method,body){var headers={};if(body!==undefined)headers['Content-Type']='application/json';var t=sessionToken();if(t)headers['Authorization']='Bearer '+t;return fetch(path,{method:method||'GET',headers:headers,body:body===undefined?undefined:JSON.stringify(body)}).then(function(res){if(res.status===401){setSession(null);location.href='/admin/login?next='+encodeURIComponent(location.pathname);throw new Error('Session expired')}return res.json().catch(function(){return null}).then(function(data){if(!res.ok){var e=new Error((data&&data.error&&data.error.message)||('HTTP '+res.status));e.status=res.status;e.code=data&&data.error&&data.error.code;throw e}return data})})}
 function show(id,text,kind){var el=document.getElementById(id);if(!el)return;el.textContent=text||'';el.className='msg'+(kind==='err'?' msg-err':kind==='ok'?' msg-ok':'')}
 function fmt(v,d){if(v===null||v===undefined||typeof v!=='number'||!isFinite(v))return '—';return v.toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:d===undefined?2:d})}
 function signed(v,d){if(v===null||v===undefined||typeof v!=='number'||!isFinite(v))return '—';var s=fmt(v,d);return v>0?'+'+s:s}

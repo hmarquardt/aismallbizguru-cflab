@@ -287,8 +287,10 @@ Provisioning the database is a **one-time operator action** outside the pipeline
 **Completed with explicit operator authorization:** `cflab-bitcoin-signals` was
 created at `2026-10-25T20:13:12.674Z` in ENAM with UUID
 `7630355d-eae7-4410-aef5-7a0486ddc523`. The authoritative production binding in
-`wrangler.jsonc` records it. Cloudflare reports zero tables: no production schema
-has been migrated. Do not create this database again. The historical procedure
+`wrangler.jsonc` records it. The initial additive schema was applied through the
+authorized pipeline, and production collection and backup verification have run.
+See [production acceptance](BITCOIN-SIGNALS-ACCEPTANCE.md) for results and the
+remaining treasury rate-limit blocker. Do not create this database again. The historical procedure
 below is for reference, not authorization to repeat it.
 
 ```sh

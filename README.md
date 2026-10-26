@@ -21,8 +21,10 @@ collection runs from this Worker's cron triggers, so the instrument keeps updati
 without a browser. It is a research tool: no trading, no brokerage keys, no
 custody, and no composite investment score.
 
-The Signals database was created with operator authorization on 2026-10-25, but
-production migrations and deployment remain pending. The working tree enables OKX funding/history and spot/index data, Kraken
+Bitcoin Signals is deployed through the existing gated pipeline with access pinned
+to the existing operator account. Final acceptance remains incomplete because
+production treasury requests are rate-limited; see the
+[acceptance record](docs/BITCOIN-SIGNALS-ACCEPTANCE.md). Enabled collectors cover OKX funding/history and spot/index data, Kraken
 spot/funding/futures-basis data, Coinbase spot, mempool.space statistics, and daily
 CoinGecko treasury reports for the operator's private personal research. Deribit
 remains disabled for US residency. The [data-rights review](docs/BITCOIN-SIGNALS-DATA-RIGHTS.md)

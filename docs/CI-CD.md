@@ -433,20 +433,17 @@ than for convenience.
 
 ## Known limitations and drift
 
-* **Bitcoin Signals release authorized (2026-10-25).** The provisioned D1 resource
-  is `7630355d-eae7-4410-aef5-7a0486ddc523` (`BTC_SIGNALS`). The operator authorized
-  committing/pushing the reviewed implementation, additive pipeline migrations and
-  deployment through the unchanged gates. OKX/Kraken funding/basis, Coinbase,
-  mempool.space and CoinGecko treasury are enabled for the accepted private
-  personal-use interpretations. Deribit stays disabled for US residency and email
-  alerts stay off. Production success still requires revision, collection and
-  backup/restore evidence; authorization alone is not verification. See
-  [BITCOIN-SIGNALS-AUDIT.md](BITCOIN-SIGNALS-AUDIT.md).
-* **Backup coverage must extend to the third database.** The existing backup gate
-  was `true` at the 2026-10-25 independent audit. The workflow and freshness report
-  now include Bitcoin Signals; its first production backup and isolated restore
-  remain pending authorized pipeline migration and collection. Existing backups must be
-  preserved ([BACKUP-RESTORE.md](BACKUP-RESTORE.md)).
+* **Bitcoin Signals is deployed; acceptance is incomplete (2026-10-26).**
+  The owner restriction was released as `53924a9` through the unchanged gates.
+  Authenticated Signals/Analytics checks, real history persistence and the
+  three-database restore drill pass. Production CoinGecko treasury attempts
+  receive HTTP 429; do not report successful daily ingestion or bypass limits.
+  Deribit stays disabled and email alerts stay off. See
+  [BITCOIN-SIGNALS-ACCEPTANCE.md](BITCOIN-SIGNALS-ACCEPTANCE.md).
+* **Three-database backup coverage is active.** Backup run 40337849021 and
+  independent restore run 40342159814 verify primary, Analytics and Signals
+  snapshots. All three freshness entries are green. Existing backup protections
+  remain authoritative ([BACKUP-RESTORE.md](BACKUP-RESTORE.md)).
 * **Source and production are reconciled (2026-10-15).** The email/invitation work
   is committed (`9dad7ba`) and matches the live deployment; `main` is ahead of
   production only by the additive `GET /api/version` route, so the first release

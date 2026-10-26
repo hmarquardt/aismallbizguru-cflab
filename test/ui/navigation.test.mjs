@@ -85,6 +85,7 @@ test('the CFLab brand links to the Control Center on every shared header', () =>
     assert.ok(brand, `${label} must render a brand link`);
     assert.ok(brand[0].includes('href="/"'), `${label} brand must point at /`);
     assert.equal(html.includes('class="brand" href="/account"'), false, `${label} brand must not point at /account`);
+    assert.ok(html.includes('href="/account"'), `${label} must keep an Account link so the page is still reachable`);
   }
   assert.ok(consolePage().includes('href="/account"'), 'the console keeps its Account link');
 });

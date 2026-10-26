@@ -85,6 +85,7 @@ const SHELL = `<header class="app-header"><div class="app-header-inner">
 <button class="tab" type="button" id="tab-evidence" data-tab="evidence" aria-selected="false">Evidence</button>
 <button class="tab" type="button" id="tab-settings" data-tab="settings" aria-selected="false">Settings</button>
 <a id="nav-admin" href="/admin/users" hidden>Admin</a>
+<a href="/account">Account</a>
 <button id="logout" class="btn btn-secondary btn-small" type="button">Log out</button>
 </nav></div></header>`;
 

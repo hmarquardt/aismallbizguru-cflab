@@ -57,5 +57,58 @@ The two schema additions (`migrations/0012_console.sql`,
 
 ## Production verification
 
-Release and live checks are appended below once the gated pipeline has released this
-commit. Nothing in this section is claimed until it has been observed.
+The console was released only through the gated `validate → deploy → verify`
+pipeline. Three releases were required because the first two exposed defects that
+the tests did not catch (recorded honestly below):
+
+| Release | Run | Outcome |
+| --- | --- | --- |
+| `1583584` | [40363848554](https://github.com/hmarquardt/aismallbizguru-cflab/actions/runs/40363848554) | Console and both migrations live; three tabs rendered blank in a real browser |
+| `57ced82` | [40366720356](https://github.com/hmarquardt/aismallbizguru-cflab/actions/runs/40366720356) | Scroll reset and visible panel errors added; blank symptom persisted |
+| `5bde537` | [40368238171](https://github.com/hmarquardt/aismallbizguru-cflab/actions/runs/40368238171) | Unclosed `#tab-projects` section fixed; all five tabs verified |
+
+### Defect found in production and its fix
+
+The first release served a shell in which `#tab-projects` was missing its closing
+`</section>`. A real HTML parser therefore nested `#tab-databases`, `#tab-jobs` and
+`#tab-system` inside `#tab-projects`: clicking one of them unhid a panel whose
+ancestor was hidden, so Overview and Projects looked correct while the other three
+appeared blank. happy-dom silently auto-closed the section at `</main>`, so the DOM
+tests passed. The fix restores the closing tag and adds a parser-independent
+regression: every `[role=tabpanel]` must be a direct child of `<main>`, must not
+contain another panel, and the shell's section tags must balance. The repaired live
+HTML was then parsed and executed by headless Chrome, which showed all five panels
+as siblings under `<main>` and each one visible with content after a click. The
+operator then confirmed all five tabs render in a normal signed-in session.
+
+Lesson recorded: string assertions and a lenient DOM are not sufficient for a page
+whose behaviour depends on element nesting; the structural test and a real-engine
+check are now part of the suite.
+
+### Verified live state
+
+| Check | Result |
+| --- | --- |
+| Revision | Both Workers report `5bde53799aee6c7e6ff7a91577a54bc26f11dfad`; `verify-production.mjs --service all --revision …` passes 21 checks; `verify-drift.mjs` is `in-sync` |
+| Root shell | `GET /` → 200 `text/html`, 39,055 bytes, balanced sections (12/12), no measurements, no external asset or inline handler |
+| Unchanged endpoints | `GET /api/health` → `{"status":"ok","service":"cflab"}`; `GET /api/version` reports the revision |
+| Unauthenticated API | `/api/admin/console/overview` and a `POST …/databases/primary/query` each return 401 `unauthorized` |
+| Registry rows in production D1 | 8 services, 63 endpoints, 9 resources, 1 repository, 4 jobs (`signals-hourly`, `signals-daily`, `analytics-maintenance`, `backup-workflow`) |
+| Overview metrics (operator-confirmed and matched to D1) | Projects 5 (5 active), users 2 (2 administrators), sessions 8, Analytics sites 6, Signals observations 319, databases 3 reachable, jobs 4 |
+| Tabs | Operator confirmed Overview, Projects, Databases, Jobs and System all render after a hard refresh |
+| Workbench, cross-database | Authenticated query at `2026-10-26T17:29:36Z` on `bitcoin-signals`: status `ok`, one row, 40 ms. The same statement on `primary` at `17:29:11Z` failed with `sql_error` ("no such table"), proving the selector targets the chosen binding and does not leak across databases |
+| Audit | Two rows written for those attempts, each holding a 64-character SHA-256 and a statement length — no statement text, no result rows |
+| Job history | The `17:17:58Z` Analytics maintenance run recorded `ok`, 6 sites, 0 purged, 5,226 ms in `console_job_runs` |
+| Backups | No backup was created or restored by this change; the System tab reads the existing attestation (checked `2026-10-26T14:37:52Z`) |
+
+### Not claimed
+
+* No authenticated screenshot or query transcript is committed; the record above
+  contains counts, timings and hashes only.
+* No saved statement had been created in production at the time of this record, so
+  the per-administrator saved-query path is verified by tests, not live usage.
+* The scheduled Signals daily collection (`06:41` UTC) and the external backup
+  workflow were not re-triggered for this acceptance; their history is read from the
+  subsystem that already records it, and the console reports an external workflow as
+  `external` rather than asserting success.
+

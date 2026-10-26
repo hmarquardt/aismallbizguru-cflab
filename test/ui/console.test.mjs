@@ -142,7 +142,10 @@ test('the console shell is accessible, responsive and free of external assets', 
     assert.match(html, new RegExp(`id="tab-${tab}"`));
   }
   assert.doesNotMatch(html, /<script[^>]+src=/);
-  assert.doesNotMatch(html, /<link[^>]+href=/);
+  // The only <link> is the inline SVG favicon; nothing external is loaded.
+  assert.equal((html.match(/<link\b[^>]*>/g) || []).length, 1);
+  assert.match(html, /<link rel="icon" type="image\/svg\+xml" href="data:image\/svg\+xml,/);
+  assert.doesNotMatch(html, /<(?:script|link|img|iframe)[^>]+(?:src|href)="(?:https?:)?\/\//);
   assert.doesNotMatch(html, /\son[a-z]+=/i);
   assert.match(html, /@media \(max-width:720px\)/);
 });

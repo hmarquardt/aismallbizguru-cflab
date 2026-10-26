@@ -10,6 +10,14 @@
 // the existing sign-in flow already stores, so an unauthenticated visitor is sent
 // through /admin/login exactly like /admin/users does today.
 
+// CFLab brand mark, identical to the one in src/ui.ts and analytics-ui/index.html:
+// a bold laboratory-flask silhouette in Cloudflare orange with a white circuit
+// trace. Inlined as a data URI, so loading the console makes no favicon request.
+// The favicon regression test asserts all three copies stay byte-identical.
+const FAVICON_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><path fill="#F38020" d="M12.5 5v7.5L6.6 24.2A2.6 2.6 0 0 0 9 28h14a2.6 2.6 0 0 0 2.4-3.8L19.5 12.5V5z"/><path fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M11.4 23.4h2.3m7.9-.9 2.2-2.2"/><circle cx="16" cy="23.4" r="3" fill="#FFFFFF"/><circle cx="21.4" cy="20.3" r="1.5" fill="#FFFFFF"/></svg>';
+const CONSOLE_FAVICON = '<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,'
+  + encodeURIComponent(FAVICON_SVG).replace(/\(/g, '%28').replace(/\)/g, '%29').replace(/'/g, '%27') + '">';
+
 const CONSOLE_STYLE = `
 :root{color-scheme:light;--bg:#f6f7f9;--surface:#fff;--surface-muted:#f9fafb;--muted:#5f6b7a;--text:#1f2933;--border:#e4e7ec;--border-strong:#d0d5dd;--accent:#2563eb;--accent-hover:#1d4ed8;--accent-soft:#eff4ff;--success:#067647;--success-soft:#ecfdf3;--warning:#b54708;--warning-soft:#fffaeb;--danger:#b42318;--danger-soft:#fef3f2;--radius:8px;--shadow:0 1px 2px rgba(16,24,40,.05)}
 *{box-sizing:border-box}html,body{margin:0;padding:0}body{background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;font-size:15px;line-height:1.5;-webkit-font-smoothing:antialiased}
@@ -547,7 +555,7 @@ const SCRIPT = `
 `;
 
 export function consolePage(){
-  return '<!doctype html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n<meta name="viewport" content="width=device-width, initial-scale=1">\n<title>CFLab operations</title>\n<style>'+
+  return '<!doctype html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n<meta name="viewport" content="width=device-width, initial-scale=1">\n'+CONSOLE_FAVICON+'\n<title>CFLab operations</title>\n<style>'+
     CONSOLE_STYLE+'</style>\n</head>\n<body>\n'+CONSOLE_BODY+'\n<script>'+SCRIPT+'</script>\n</body>\n</html>';
 }
 

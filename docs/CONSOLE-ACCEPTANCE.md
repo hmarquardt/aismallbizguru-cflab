@@ -67,6 +67,11 @@ the tests did not catch (recorded honestly below):
 | `57ced82` | [40366720356](https://github.com/hmarquardt/aismallbizguru-cflab/actions/runs/40366720356) | Scroll reset and visible panel errors added; blank symptom persisted |
 | `5bde537` | [40368238171](https://github.com/hmarquardt/aismallbizguru-cflab/actions/runs/40368238171) | Unclosed `#tab-projects` section fixed; all five tabs verified |
 
+The code revision verified above is `5bde537`. Releases after it are documentation
+only: each still goes through the same gated pipeline and the revision and drift
+checks are repeated afterwards, so the live revision moves without the console's
+behaviour changing.
+
 ### Defect found in production and its fix
 
 The first release served a shell in which `#tab-projects` was missing its closing
@@ -89,7 +94,7 @@ check are now part of the suite.
 
 | Check | Result |
 | --- | --- |
-| Revision | Both Workers report `5bde53799aee6c7e6ff7a91577a54bc26f11dfad`; `verify-production.mjs --service all --revision …` passes 21 checks; `verify-drift.mjs` is `in-sync` |
+| Revision | Both Workers reported `5bde53799aee6c7e6ff7a91577a54bc26f11dfad`; `verify-production.mjs --service all --revision …` passed 21 checks; `verify-drift.mjs` was `in-sync` |
 | Root shell | `GET /` → 200 `text/html`, 39,055 bytes, balanced sections (12/12), no measurements, no external asset or inline handler |
 | Unchanged endpoints | `GET /api/health` → `{"status":"ok","service":"cflab"}`; `GET /api/version` reports the revision |
 | Unauthenticated API | `/api/admin/console/overview` and a `POST …/databases/primary/query` each return 401 `unauthorized` |

@@ -3,7 +3,7 @@ import type { AnalyticsBindings, AnalyticsEnv } from './env';
 import { ApiError } from '../http';
 import { collector } from './collector';
 import { sites } from './api';
-import { runMaintenance } from './maintenance';
+import { runRecordedMaintenance } from './maintenance';
 import { deploymentIdentity } from '../shared/revision';
 
 export const app = new Hono<AnalyticsEnv>({ strict: false });
@@ -53,7 +53,7 @@ export default {
   fetch: (request: Request, env: AnalyticsBindings, ctx: ExecutionContext): Response | Promise<Response> =>
     app.fetch(request, env, ctx),
   scheduled: (_event: ScheduledController, env: AnalyticsBindings, ctx: ExecutionContext): void => {
-    ctx.waitUntil(runMaintenance(env.ANALYTICS).catch(() => {
+    ctx.waitUntil(runRecordedMaintenance(env.ANALYTICS).catch(() => {
       console.error(JSON.stringify({ event: 'maintenance_failed' }));
     }));
   },

@@ -6,6 +6,13 @@ This is a working local MVP, **not a drop-in LabBox replacement**. The source/cl
 
 The independent deployment target is **https://cflab.aismallbizguru.com**, a lasting production-equivalent environment with its own three D1 databases (`cflab`, `cflab-analytics`, `cflab-bitcoin-signals`) and private `cflab-files` R2 bucket. **https://lab.aismallbizguru.com continues serving the existing LabBox unchanged.** Consumers can migrate and validate against CFLab before any future hostname cutover.
 
+`/` is an authenticated operations console for that deployment: live service
+overview and warnings, a declarative service registry, a read-only D1 workbench with
+CSV export and per-administrator saved statements, scheduled-job history, and a
+system view (revision, binding presence, database reachability, backup
+attestation). It runs in the existing Worker with the existing administrator
+session. See [CONSOLE.md](docs/CONSOLE.md).
+
 ## Bitcoin Signals
 
 Bitcoin Signals is a private research instrument inside this repository, served at

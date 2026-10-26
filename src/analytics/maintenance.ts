@@ -5,7 +5,6 @@ interface SiteConfig {
   timezone: string;
   raw_retention_days: number;
 }
-
 const ROLLUP_DAYS = 3;
 const PURGE_CHUNK = 2000;
 const PURGE_MAX_CHUNKS = 10;
@@ -98,3 +97,34 @@ async function purge(db: D1Database, siteId: number, cutoffDay: string): Promise
   }
   return deleted;
 }
+
+// Records one structured outcome for the hourly job so the CFLab console can show
+// its schedule, duration and failures without inventing a second scheduler.
+// History is best effort and never changes the maintenance verdict.
+export async function runRecordedMaintenance(db: D1Database, nowMs = Date.now()): Promise<{ sites: number; purged: number }> {
+  const startedAt = new Date().toISOString();
+  const startedMs = Date.now();
+  try {
+    const result = await runMaintenance(db, nowMs);
+    await recordMaintenanceRun(db, startedAt, 'ok', { sites: result.sites, purged: result.purged, duration_ms: Date.now() - startedMs }, null);
+    return result;
+  } catch (error) {
+    const code = error instanceof Error && error.name ? error.name.slice(0, 64) : 'maintenance_failed';
+    await recordMaintenanceRun(db, startedAt, 'failed', { duration_ms: Date.now() - startedMs }, code);
+    throw error;
+  }
+}
+
+async function recordMaintenanceRun(
+  db: D1Database, startedAt: string, status: 'ok' | 'failed', summary: Record<string, number>, errorCode: string | null,
+): Promise<void> {
+  try {
+    await db.prepare(
+      `INSERT INTO console_job_runs (id, job, started_at, finished_at, status, summary_json, error_code)
+       VALUES (?, 'analytics-maintenance', ?, ?, ?, ?, ?)`)
+      .bind(crypto.randomUUID(), startedAt, new Date().toISOString(), status, JSON.stringify(summary), errorCode).run();
+  } catch {
+    console.error(JSON.stringify({ event: 'maintenance_history_write_failed', status }));
+  }
+}
+

@@ -1,6 +1,6 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { JUNKDRAWER, TOP_HAT, bindings, call, canonicalPayload, jsonCall, migrate, resetData, seedHuman } from './helpers';
-import { runMaintenance } from '../../src/analytics/maintenance';
+import { runMaintenance, runRecordedMaintenance } from '../../src/analytics/maintenance';
 import { shiftDay } from '../../src/analytics/sanitize';
 
 beforeAll(migrate);
@@ -163,6 +163,20 @@ describe('site-scoped reporting', () => {
     expect(summary.pageviews).toBe(1);
     const series = await (await authed(`/api/sites/${JUNKDRAWER}/timeseries?from=${from}&to=${today}&bucket=day`, token)).json<{ points: Array<{ date: string; pageviews: number }> }>();
     expect(series.points).toContainEqual({ date: oldDay, pageviews: 1, events: 0, sessions: 1 });
+  });
+
+  it('records one structured outcome per maintenance run for job observability', async () => {
+    const result = await runRecordedMaintenance(bindings.ANALYTICS, Date.now());
+    expect(result.sites).toBeGreaterThan(0);
+    const row = await bindings.ANALYTICS.prepare(
+      "SELECT job, status, started_at, finished_at, summary_json, error_code FROM console_job_runs WHERE job = 'analytics-maintenance'")
+      .first<{ job: string; status: string; started_at: string; finished_at: string; summary_json: string; error_code: string | null }>();
+    expect(row).toMatchObject({ job: 'analytics-maintenance', status: 'ok', error_code: null });
+    expect(Date.parse(row!.finished_at)).toBeGreaterThanOrEqual(Date.parse(row!.started_at));
+    const summary = JSON.parse(row!.summary_json) as Record<string, number>;
+    expect(summary.sites).toBeGreaterThan(0);
+    expect(summary).toHaveProperty('purged');
+    expect(summary).toHaveProperty('duration_ms');
   });
 
   it('enforces the viewer minimum on every report route', async () => {

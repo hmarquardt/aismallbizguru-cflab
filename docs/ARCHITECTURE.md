@@ -103,6 +103,20 @@ Before each fetch, both A and AAAA answers are checked. Resolution errors fail c
 
 Fetch uses `redirect: manual`; every redirect is rejected, even to an otherwise approved host. No caller headers, cookies, bearer tokens, or Origin headers are forwarded. Server headers are explicitly configured; secrets live in a Worker secret JSON map and D1 holds references. Do not put credentials in ordinary configured headers. Responses expose only an allowed content type and bytes, never upstream cookies, redirects, CORS, or diagnostic headers. Non-2xx status becomes a sanitized 502. Response size is enforced while reading actual bytes, even with missing/misleading Content-Length. A single deadline covers DNS, response headers, and body reading; timeout returns 504. Proxy caching is disabled (`cache_ttl: 0`) to avoid shared authenticated caches.
 
+## Operations console
+
+`GET /` is an authenticated operations console served by the primary Worker: an
+overview with live warnings and recent activity, a searchable service registry, a
+read-only D1 workbench, job observability, and a system view (revision, binding
+presence, database reachability, backup attestation). It adds no Worker, database,
+service, credential or frontend dependency, and the primary Worker still serves no
+static assets.
+
+The registry is declarative (`migrations/0012_console.sql`, additive) and the
+workbench only accepts a single tokenized `SELECT`/`WITH` statement executed as a
+bounded derived table against the three allowlisted D1 bindings, with a hashed audit
+row per attempt. See [CONSOLE.md](CONSOLE.md).
+
 ## Services intentionally absent
 
 No Durable Objects: there is no per-entity coordination or live session requirement. No Queues or Workflows: requests are small and synchronous. No Analytics Engine: analytics is a separate Worker with explicit D1 tables. No DuckDB, Iceberg, or R2 Data Catalog: there is no current archival query workload. R2 and a small reporting seam leave room for these later without adding them to ordinary requests. No ORM, schema framework, third-party identity provider, MFA, or VPS. Authentication mail uses the native `send_email` binding, rate limiting uses native rate-limit bindings, and analytics retention/rollups use a native Cron trigger, rather than external services.

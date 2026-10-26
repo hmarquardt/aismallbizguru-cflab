@@ -13,6 +13,8 @@ import { publicTopHat } from './routes/public-top-hat';
 import { accountPage, forgotPage, loginPage, resetPage, usersPage } from './ui';
 import { signals } from './bitcoin-signals/api';
 import { signalsPage } from './bitcoin-signals/dashboard';
+import { consoleRoutes } from './routes/console';
+import { consolePage } from './console/page';
 import { deploymentIdentity } from './shared/revision';
 
 const methods = ['GET', 'POST', 'PATCH', 'DELETE'];
@@ -54,11 +56,18 @@ export function createApp(adminAuth: MiddlewareHandler<ContextEnv>) {
   app.route('/api/analytics', analytics);
   app.use('/api/admin/*', adminAuth);
   app.route('/api/admin', admin);
+  // Operations console API. It is registered inside the same authenticated
+  // /api/admin prefix, so requireHumanAdmin applies before any handler runs.
+  app.route('/api/admin/console', consoleRoutes);
   // Bitcoin Signals: identity and permissions are checked against the primary
   // database inside the route; all project data comes from the BTC_SIGNALS
   // binding. The page itself is an empty shell with no data.
   app.route('/api/bitcoin-signals', signals);
   app.get('/bitcoin-signals', () => html(signalsPage()));
+  // Authenticated operations console. The shell contains no data: every figure is
+  // loaded from /api/admin/console/* with a human session, and an unauthenticated
+  // visitor is sent through the existing /admin/login page.
+  app.get('/', () => html(consolePage()));
   app.get('/admin', c => c.redirect('/admin/users'));
   app.get('/admin/login', () => html(loginPage()));
   app.get('/admin/users', () => html(usersPage()));

@@ -22,6 +22,39 @@ Common statuses: 400 invalid input, 401 missing/invalid/revoked/expired bearer o
 
 This is liveness only, not a database/storage readiness check.
 
+## Operations console
+
+`GET /` serves the authenticated operations console shell. The shell contains no
+data; it reads the existing `cflab_session` token from `sessionStorage`, calls
+`GET /api/auth/me`, and sends an unauthenticated visitor to `/admin/login` and a
+signed-in non-administrator to `/account`. The page, tabs, and security model are
+documented in [CONSOLE.md](CONSOLE.md).
+
+Every console route requires an active administrator human session; machine tokens
+and ordinary project members are refused exactly as for the rest of administration.
+
+| Method/path | Behavior |
+| --- | --- |
+| GET `/api/admin/console/overview` | `{generated_at,caller,revision,summary,health,warnings,activity}` |
+| GET `/api/admin/console/registry` | `{services,endpoints,resources,repositories,jobs,counts}` |
+| GET `/api/admin/console/jobs` | `{generated_at,jobs}` with next run, last attempt/success, staleness, warnings |
+| GET `/api/admin/console/system` | `{revision,bindings,databases,backup,notes}`; binding presence only, never a value |
+| GET `/api/admin/console/databases` | `{databases}` — the three allowlisted D1 stores |
+| GET `/api/admin/console/databases/:id/schema` | `{database,tables[{name,columns,indexes}],views,generated_at}` |
+| POST `/api/admin/console/databases/:id/query` | `{sql,page?,page_size?}` → `{database,columns,rows,metrics}`; one read-only statement |
+| POST `/api/admin/console/databases/:id/export` | `{sql}` → `text/csv` attachment, ≤ 2000 rows |
+| GET `/api/admin/console/saved-queries` | `{queries}` for the calling administrator |
+| POST `/api/admin/console/saved-queries` | `{name,database_id,sql}` → 201 |
+| DELETE `/api/admin/console/saved-queries/:id` | 204, or 404 if the row is not the caller's |
+
+Database identifiers are `primary`, `analytics`, and `bitcoin-signals`; anything
+else is `404 database_not_allowed`. Refused SQL returns 400 with a stable code
+(`sql_not_select`, `sql_multiple_statements`, `sql_forbidden_keyword`,
+`sql_parameters_unsupported`, `sql_too_long`, `sql_empty`), an oversized export
+returns 413 `export_too_large`, and a statement that reports a write is discarded
+with `sql_write_detected`. Each attempt writes one `console_query_audit` row
+containing a SHA-256 of the statement, never the statement text or its results.
+
 ## Human authentication
 
 Human credentials are separate from machine app tokens. A human session token starts with `cflu_`, is returned only by login, and works as `Authorization: Bearer` on app routes. Full lifecycle details are in [AUTH.md](AUTH.md).

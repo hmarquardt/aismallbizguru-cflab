@@ -263,3 +263,35 @@ describe('Search Console aggregates', () => {
     expect(body.sync.last_success_at).toBeNull();
   });
 });
+
+describe('Site slug renames', () => {
+  it('keeps a property attached to its Site after the slug changes', async () => {
+    // The property was linked while the slug matched the reviewed mapping.
+    const siteId = await seedSearchSite();
+    await seedProperty({ siteId });
+    const token = await tokenFor(true);
+    await bindings.ANALYTICS.prepare("UPDATE analytics_sites SET slug = 'renamed-forecast' WHERE id = ?")
+      .bind(siteId).run();
+    const status = await (await get('/api/sites/renamed-forecast/search/status', token))
+      .json<{ properties: { property: string; mapped: boolean }[] }>();
+    expect(status.properties.map(item => item.property)).toEqual([PROPERTY]);
+    expect(status.properties[0]!.mapped).toBe(true);
+    // The renamed slug is not in the reviewed mapping, so a report without a
+    // property is not resolved by name alone.
+    const summary = await get('/api/sites/renamed-forecast/search/summary?from=2026-10-25&to=2026-10-26&property=' + encodeURIComponent(PROPERTY), token);
+    expect(summary.status).toBe(200);
+  });
+
+  it('does not silently attach an unrelated property row to another Site', async () => {
+    const siteId = await seedSearchSite();
+    const other = await bindings.ANALYTICS.prepare("SELECT id FROM analytics_sites WHERE slug = 'top-hat-ferals'")
+      .first<{ id: number }>();
+    await seedProperty({ property: OTHER_PROPERTY, siteId: Number(other!.id) });
+    const token = await tokenFor(true);
+    const status = await (await get(`/api/sites/${SLUG}/search/status`, token))
+      .json<{ properties: { property: string }[] }>();
+    expect(status.properties.map(item => item.property)).not.toContain(OTHER_PROPERTY);
+    expect(status.properties.map(item => item.property)).toContain(PROPERTY);
+    void siteId;
+  });
+});

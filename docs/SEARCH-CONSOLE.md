@@ -39,7 +39,9 @@ unmapped properties are still collected, retained and reported by
 `GET /api/gsc/status`; their data is simply not shown under a Site. To map one,
 create the Analytics Site with that slug (`New site` in the dashboard, or
 `POST /api/sites`) and the next collection links it — no code or credential
-change and no backfill restart, because rows are keyed by property.
+change and no backfill restart, because rows are keyed by property. Renaming a
+Site's slug does not detach an already linked property: the stored link is kept
+and the property stays visible on that Site.
 
 ## What is collected
 

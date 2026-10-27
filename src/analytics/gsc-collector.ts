@@ -256,7 +256,9 @@ export async function siteIdBySlug(db: D1Database): Promise<Map<string, number>>
 }
 
 // Registers the property before any data is fetched, so a property that is
-// accessible but has no traffic yet is still visible and observable.
+// accessible but has no traffic yet is still visible and observable. An existing
+// Site link survives a Site slug rename (the code mapping then resolves to no
+// Site, but the stored link is kept) so a rename never detaches retained data.
 export async function upsertProperty(
   db: D1Database, definition: GscPropertyDefinition, siteId: number | null, permissionLevel: string | null, nowMs: number,
 ): Promise<void> {
@@ -267,8 +269,8 @@ export async function upsertProperty(
        (property, property_kind, hostname, label, site_id, permission_level, active, created_at_ms, updated_at_ms)
      VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
      ON CONFLICT(property) DO UPDATE SET property_kind = excluded.property_kind, hostname = excluded.hostname,
-       label = excluded.label, site_id = excluded.site_id, permission_level = excluded.permission_level,
-       active = 1, updated_at_ms = excluded.updated_at_ms`)
+       label = excluded.label, site_id = COALESCE(excluded.site_id, gsc_properties.site_id),
+       permission_level = excluded.permission_level, active = 1, updated_at_ms = excluded.updated_at_ms`)
     .bind(definition.property, parsed.kind, parsed.hostname, definition.label, siteId, permissionLevel, nowMs, nowMs)
     .run();
 }

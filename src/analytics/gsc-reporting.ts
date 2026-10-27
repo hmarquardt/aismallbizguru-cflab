@@ -69,15 +69,11 @@ async function siteProperties(db: D1Database, siteSlug: string, siteId: number):
             last_attempt_at, last_success_at, last_error_code, days_covered, newest_day, first_incomplete_day
      FROM gsc_properties WHERE site_id = ? ORDER BY property`).bind(siteId).all<PropertyRow>();
   const registered = new Map<string, PropertyRow>(results.map(row => [row.property, row]));
-  const definitions = definitionsForSiteSlug(siteSlug);
-  const views: GscPropertyView[] = [];
-  for (const definition of definitions) {
-    const row = registered.get(definition.property);
-    const hostname = definition.property.startsWith('sc-domain:')
-      ? definition.property.slice('sc-domain:'.length) : '';
-    views.push({
-      property: definition.property,
-      label: definition.label,
+  const view = (property: string, label: string, row: PropertyRow | undefined): GscPropertyView => {
+    const hostname = property.startsWith('sc-domain:') ? property.slice('sc-domain:'.length) : '';
+    return {
+      property,
+      label,
       hostname: row?.hostname ?? hostname,
       permission_level: row?.permission_level ?? null,
       mapped: true,
@@ -90,7 +86,17 @@ async function siteProperties(db: D1Database, siteSlug: string, siteId: number):
       days_covered: Number(row?.days_covered ?? 0),
       backfill_cursor: row?.backfill_cursor ?? null,
       backfill_complete: row ? !!row.backfill_complete : false,
-    });
+    };
+  };
+  const views = definitionsForSiteSlug(siteSlug).map(definition =>
+    view(definition.property, definition.label, registered.get(definition.property)));
+  // A property already linked to this Site stays visible even if the Site slug was
+  // renamed away from the reviewed mapping, so retained search history is never
+  // silently orphaned. Rows are only ever written for the reviewed properties.
+  const seen = new Set(views.map(item => item.property));
+  for (const row of results) {
+    if (seen.has(row.property)) continue;
+    views.push(view(row.property, row.label, row));
   }
   return views;
 }

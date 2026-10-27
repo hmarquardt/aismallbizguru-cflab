@@ -90,6 +90,35 @@ authorization to delete anything now, weaken routine backup verification, modify
 credentials, or add a deletion path to the backup job. See
 [the data-rights review](docs/BITCOIN-SIGNALS-DATA-RIGHTS.md).
 
+## Search Console boundaries
+
+Google Search Console collection lives in the Analytics Worker
+(`src/analytics/gsc-*.ts`) and writes only its own `gsc_*` tables. The rules that
+must not be relaxed:
+
+* The readable properties are the six reviewed entries in
+  `src/analytics/gsc-properties.ts`. A request, a discovered Google property, or a
+  newly added Google property must never widen that list; mapping is an explicit
+  `siteSlug` in the same file.
+* `GSC_SERVICE_ACCOUNT_JSON` is a Worker Secret. Never log, return, store, or send
+  the service-account JSON, the JWT assertion, or an access token anywhere — API
+  responses, `console_job_runs`, error messages, or dashboard JavaScript included.
+  Do not add Google scripts or client-side Google requests to any public site.
+* Property totals come from the date-only report. Top-query and page reports are
+  bounded top-N samples and must never be summed into a total or presented as
+  complete.
+* Search data stays separate from first-party analytics: never add clicks to
+  pageviews, never backfill `analytics_events` from Google, and keep Google's
+  `report_day` distinct from a Site's local `site_day`.
+* A zero row means Google reported no traffic for that day; no row means the day
+  was never collected. Do not collapse the two, and do not show invented demo
+  metrics.
+* Collection stays inside the existing hourly cron with its lease, request budget,
+  retry cap, and window replace semantics. Do not add a second scheduler, a queue,
+  or a manual deployment path.
+* See [SEARCH-CONSOLE.md](docs/SEARCH-CONSOLE.md) for the property list, schema,
+  scheduling, failure codes, and operations.
+
 ## Bitcoin Signals boundaries
 
 Bitcoin Signals (`/bitcoin-signals`) is a research instrument in this repository.

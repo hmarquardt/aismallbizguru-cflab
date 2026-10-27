@@ -25,7 +25,7 @@ Legacy collection stays compatible: the most specific zone routes send `lab.aism
 | D1 | `cflab` (`DB`) | `cflab-analytics` (`ANALYTICS`) |
 | R2 | `cflab-files` (`FILES`) | none |
 | Static assets | none | `analytics-ui/` |
-| Cron | none | hourly at `:17` for rollups and retention |
+| Cron | none | hourly at `:17` for rollups, retention and Search Console collection |
 | Service binding | none | `CFLAB` → `cflab#HumanAuthService` |
 
 ## Site model
@@ -132,6 +132,17 @@ GET    /api/sites/:site/geography
 GET    /api/sites/:site/events
 GET    /api/sites/:site/recent
 GET    /api/sites/:site/live
+
+GET    /api/sites/:site/search/status
+GET    /api/sites/:site/search/summary
+GET    /api/sites/:site/search/timeseries
+GET    /api/sites/:site/search/queries
+GET    /api/sites/:site/search/pages
+GET    /api/sites/:site/search/breakdowns
+
+GET    /api/gsc/properties                     (global admin, connectivity probe)
+GET    /api/gsc/status                         (global admin)
+POST   /api/gsc/sync                           (global admin, bounded)
 ```
 
 `:site` accepts the opaque public ID, the legacy key, or the slug. Reports accept `from`, `to` (calendar dates in the Site timezone; default last 7 days) and `domain` (registered hostname). Day buckets use `site_day`; hour buckets are UTC. `live` is a five-minute window (`events`, `pageviews`, `sessions`, active pages); the dashboard polls it every 15 seconds. No WebSockets, Durable Objects, or heartbeats are involved.
@@ -143,6 +154,7 @@ GET    /api/sites/:site/live
 - **Overview** (default): KPI row (pageviews, sessions, events, pages/session), a time-series chart with Pageviews/Sessions/Events switching, top pages, referrers, devices, browsers/OS, recent activity, and the live view. Previous-period deltas are computed from a second summary request; when the previous period has no data the delta is omitted rather than invented. New Sites show a "No analytics yet" state that links to Settings.
 - **Pages**: page/path report with pageviews, sessions, and share of total.
 - **Acquisition**: referrers, aggregated sources, and source/medium/campaign rows.
+- **Search**: Google Search Console impressions, clicks, CTR, average position, a daily trend, top queries, top landing pages, device/country breakdowns, and the collection status/freshness. Search Console data is collected server-to-server, stored in its own tables, and never added to pageviews; see [SEARCH-CONSOLE.md](SEARCH-CONSOLE.md).
 - **Events**: custom event totals with share, plus recent custom events.
 - **Settings**: General, Tracking (snippet + copy), Domains, Privacy & retention, and Access, gated by the viewer/editor/owner role.
 
@@ -157,6 +169,8 @@ Raw retention defaults to 90 days per Site (`raw_retention_days`, 1–3650). The
 1. rebuilds `analytics_daily_site`, `analytics_daily_domains`, `analytics_daily_pages`, `analytics_daily_referrers`, and `analytics_daily_events` for the last three days;
 2. rolls up any expired days that still have raw rows (at most 10 per run; purge is deferred if more remain, so nothing is deleted before it is aggregated);
 3. deletes expired raw events in bounded chunks of 2,000 (up to 10 chunks per Site per run).
+
+The same hourly trigger runs the Search Console collection (daily reconciliation plus a bounded historical backfill). It is independent of the rollup job, records its own `console_job_runs` history, and never writes first-party analytics tables. Migration `0004_gsc_search.sql` adds the `gsc_*` tables; [SEARCH-CONSOLE.md](SEARCH-CONSOLE.md) documents the property list, scheduling, failure codes, API, and empty states.
 
 `summary` and day-bucket `timeseries` combine retained raw events with daily aggregate totals when a range reaches past raw retention, so long-range trends survive deletion. Other reports are raw-window based by design.
 

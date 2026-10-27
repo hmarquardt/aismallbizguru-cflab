@@ -10,3 +10,8 @@ COINGECKO_DEMO_API_KEY=
 # EMAIL send_email binding declared in wrangler.local.jsonc. No provider secret is
 # required. Locally the binding is simulated; add "remote": true to the binding in
 # wrangler.local.jsonc to send real email through the account during `wrangler dev`.
+# Optional locally: Analytics' Google Search Console collector reads this as a Worker
+# Secret (never a `vars` entry) and mints a read-only OAuth token from it. Paste the
+# service-account JSON on one line. Leave it empty to exercise the
+# `configured: false` / not_configured paths; no Google request is attempted.
+GSC_SERVICE_ACCOUNT_JSON=

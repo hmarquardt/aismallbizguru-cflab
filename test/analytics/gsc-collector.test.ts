@@ -188,7 +188,7 @@ async function resetGsc(): Promise<void> {
 }
 
 // The four properties that have an Analytics Site, matching src/analytics/gsc-properties.ts.
-const MAPPED_SLUGS = ['aismallbizguru', 'turkeyvulturesoftware', 'worthlookingup', 'fruiting-forecast'];
+const MAPPED_SLUGS = ['aismallbizguru', 'turkeyvulturesoftware', 'worthlookingup', 'fruiting-forecast', 'roadnaturalist', 'hankmarquardt'];
 
 async function seedMappedSites(): Promise<void> {
   for (const slug of MAPPED_SLUGS) {
@@ -325,9 +325,16 @@ describe('collection', () => {
     });
     expect(Number(row!.days_covered)).toBe(37);
 
-    // Unmapped properties are collected but stay unlinked to a Site.
-    expect((await propertyRow('sc-domain:roadnaturalist.com'))!.site_id).toBeNull();
-    expect((await propertyRow('sc-domain:hankmarquardt.com'))!.site_id).toBeNull();
+    // Every reviewed property resolves to the Site with that slug.
+    for (const [property, slug] of [
+      ['sc-domain:roadnaturalist.com', 'roadnaturalist'],
+      ['sc-domain:hankmarquardt.com', 'hankmarquardt'],
+      ['sc-domain:fruitingforecast.com', 'fruiting-forecast'],
+    ] as const) {
+      const site = await bindings.ANALYTICS.prepare('SELECT id FROM analytics_sites WHERE slug = ?').bind(slug)
+        .first<{ id: number }>();
+      expect((await propertyRow(property))!.site_id).toBe(Number(site!.id));
+    }
 
     const run = await bindings.ANALYTICS.prepare(
       "SELECT status, summary_json, error_code FROM console_job_runs WHERE job = 'analytics-search-console'").first<{ status: string; summary_json: string; error_code: string | null }>();

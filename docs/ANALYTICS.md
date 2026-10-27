@@ -51,8 +51,15 @@ First-class Sites are created with `POST /api/sites` (global CFLab admin, also u
 | Site | public tracking ID | domains |
 | --- | --- | --- |
 | Fruiting Forecast | `as_Puys7BZHNPEG5lHUysxjHO` | `fruitingforecast.com` (primary), `www.fruitingforecast.com` (alias) |
+| Worth Looking Up | `as_PKAOHGDzw9aJP98hZxaPQB` | `worthlookingup.com` (primary), `www.worthlookingup.com` (alias) |
+| AI Small Business Guru | `as_4YsDnNOcpAQq4l1ARNY2pl` | `aismallbizguru.com` (primary), `www.aismallbizguru.com` (alias) |
+| Turkey Vulture Software | `as_5wh58kbCgGxaRewfGznoaC` | `turkeyvulturesoftware.com` (primary), `www.turkeyvulturesoftware.com` (alias) |
+| Road Naturalist | `as_ieqirphcgPaoX2E6aUExao` | `roadnaturalist.com` (primary), `www.roadnaturalist.com` (alias) |
+| Hank Marquardt | `as_LSLKDIyn2pzUxJFLdLjLhj` | `hankmarquardt.com` (primary), `www.hankmarquardt.com` (alias) |
 
 Fruiting Forecast was registered through Cloudflare-account-authenticated operator access to `cflab-analytics` because no browser admin session was available; the row matches what `POST /api/sites` creates (slug `fruiting-forecast`, `created_by_user_id` = the active global admin, UTC, 90-day raw retention, DNT/GPC respected). The API remains the normal path for new Sites, and a fresh database does not seed this row.
+
+Road Naturalist and Hank Marquardt were provisioned on 2026-10-27 with an operator-authorized, scoped D1 write because no administrator session was available to the agent: the SQL replicated `POST /api/sites` plus its two domain rows exactly (same columns, UTC, 90-day retention, DNT/GPC on, `created_by_user_id` = the active global admin, apex primary + `www` alias) and used `INSERT OR IGNORE` so a re-application is a no-op. The ANALYTICS Time Travel bookmark before the write was `00000622-00000000-00005111-7ba0f498a4dc2011d8511ec51b597c1a` (after: `00000622-00000006-00005111-2c7481229a993c3a84208019561934ab`). No other data was touched, no duplicate slug exists, and the API remains the normal path.
 
 ## Raw event model
 

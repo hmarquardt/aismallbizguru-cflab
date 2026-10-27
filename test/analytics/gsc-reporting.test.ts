@@ -258,16 +258,19 @@ describe('Search Console aggregates', () => {
       configured: boolean; sync: { last_success_at: string | null };
     }>();
     expect(body.properties).toHaveLength(GSC_PROPERTIES.length);
+    // Every reviewed property is intended to have a Site, so nothing is
+    // deliberately unlinked any more.
+    expect(body.mapping.unmapped).toEqual([]);
     expect(body.mapping.mapped).toBe(1);
-    // Two properties are deliberately not linked to a Site ...
-    expect(body.mapping.unmapped).toEqual([
-      'sc-domain:roadnaturalist.com', 'sc-domain:hankmarquardt.com',
-    ]);
-    // ... and the three reviewed slugs that have no Site in this database are
-    // reported as an unresolved mapping instead of being silently hidden.
-    expect(body.mapping.unresolved).toEqual([
-      'sc-domain:aismallbizguru.com', 'sc-domain:turkeyvulturesoftware.com', 'sc-domain:worthlookingup.com',
-    ]);
+    // The five reviewed slugs with no Site in this test database are reported as
+    // an unresolved mapping instead of being silently hidden.
+    expect(new Set(body.mapping.unresolved)).toEqual(new Set([
+      'sc-domain:aismallbizguru.com',
+      'sc-domain:turkeyvulturesoftware.com',
+      'sc-domain:worthlookingup.com',
+      'sc-domain:roadnaturalist.com',
+      'sc-domain:hankmarquardt.com',
+    ]));
     expect(body.configured).toBe(false);
     expect(body.sync.last_success_at).toBeNull();
   });

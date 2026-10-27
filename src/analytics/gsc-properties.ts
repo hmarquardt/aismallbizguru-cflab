@@ -9,14 +9,15 @@
 // `siteSlug` is the explicit link to a CFLab Analytics Site (`analytics_sites
 // .slug`). Two properties have no Site yet:
 //
-//   * `sc-domain:roadnaturalist.com`  — no Analytics Site is registered.
-//   * `sc-domain:hankmarquardt.com`   — no Analytics Site is registered.
+// Every property is linked to a Site. Two were provisioned later than the rest
+// (2026-10-27, Road Naturalist and Hank Marquardt), which is why the mapping is
+// separate from the Site rows: a property collected before its Site existed keeps
+// its retained history and is linked by the next collection run.
 //
-// Their Search Console data is still collected, retained and observable, but it
-// is not shown under a Site until a Site with that slug exists. Create the Site
-// through the dashboard (`New site`) and the next collection links the property;
-// no code change and no credential change are required. Setting `siteSlug`
-// explicitly is the only way to add a property.
+// Their Search Console data is collected, retained and observable even when a Site
+// has no first-party tracking. Setting `siteSlug` explicitly is the only way to
+// add a property, and a slug that does not exist is reported as `unresolved` by
+// `GET /api/gsc/status` rather than silently hidden.
 
 export interface GscPropertyDefinition {
   /** Google's property identifier: `sc-domain:example.com` or a URL prefix. */
@@ -29,8 +30,8 @@ export interface GscPropertyDefinition {
 
 export const GSC_PROPERTIES: readonly GscPropertyDefinition[] = [
   { property: 'sc-domain:aismallbizguru.com', label: 'AI Small Business Guru', siteSlug: 'aismallbizguru' },
-  { property: 'sc-domain:roadnaturalist.com', label: 'Road Naturalist', siteSlug: null },
-  { property: 'sc-domain:hankmarquardt.com', label: 'Hank Marquardt', siteSlug: null },
+  { property: 'sc-domain:roadnaturalist.com', label: 'Road Naturalist', siteSlug: 'roadnaturalist' },
+  { property: 'sc-domain:hankmarquardt.com', label: 'Hank Marquardt', siteSlug: 'hankmarquardt' },
   { property: 'sc-domain:turkeyvulturesoftware.com', label: 'Turkey Vulture Software', siteSlug: 'turkeyvulturesoftware' },
   { property: 'sc-domain:worthlookingup.com', label: 'Worth Looking Up', siteSlug: 'worthlookingup' },
   { property: 'sc-domain:fruitingforecast.com', label: 'Fruiting Forecast', siteSlug: 'fruiting-forecast' },

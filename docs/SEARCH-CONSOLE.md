@@ -28,20 +28,25 @@ mapped here.
 | Property | Analytics Site slug | Status |
 | --- | --- | --- |
 | `sc-domain:aismallbizguru.com` | `aismallbizguru` | mapped |
-| `sc-domain:roadnaturalist.com` | — | collected, no Site registered |
-| `sc-domain:hankmarquardt.com` | — | collected, no Site registered |
+| `sc-domain:roadnaturalist.com` | `roadnaturalist` | mapped |
+| `sc-domain:hankmarquardt.com` | `hankmarquardt` | mapped |
 | `sc-domain:turkeyvulturesoftware.com` | `turkeyvulturesoftware` | mapped |
 | `sc-domain:worthlookingup.com` | `worthlookingup` | mapped |
 | `sc-domain:fruitingforecast.com` | `fruiting-forecast` | mapped |
 
-All six were verified on 2026-10-27 with `siteRestrictedUser` permission. The two
-unmapped properties are still collected, retained and reported by
-`GET /api/gsc/status`; their data is simply not shown under a Site.
-`GET /api/gsc/status` separates `unmapped` (deliberately no Site) from
-`unresolved` (a reviewed `siteSlug` that does not exist in `analytics_sites`),
-so a typo or a renamed slug is visible instead of silently hiding data. The
-slugs above are the real production values; `fruiting-forecast` contains a
-hyphen. To map one,
+All six were verified on 2026-10-27 with `siteRestrictedUser` permission, and all
+six are mapped to an Analytics Site. Road Naturalist and Hank Marquardt were the
+last two: their Sites were provisioned on 2026-10-27 (ids 7 and 8), so the same
+collection table now feeds the dashboard for every property. `GET /api/gsc/status`
+separates `unmapped` (deliberately no Site) from `unresolved` (a reviewed
+`siteSlug` that does not exist in `analytics_sites`), so a typo or a renamed slug
+is visible instead of silently hiding data. The slugs above are the real
+production values; `fruiting-forecast` contains a hyphen.
+
+Hank Marquardt has **no first-party tracking**: its site policy forbids client
+JavaScript and analytics, and its CSP has no `script-src`. Search Console data is
+still collected for it because that collection is server-to-server and needs no
+browser instrumentation. To map one,
 create the Analytics Site with that slug (`New site` in the dashboard, or
 `POST /api/sites`) and the next collection links it — no code or credential
 change and no backfill restart, because rows are keyed by property. Renaming a

@@ -5,6 +5,7 @@ import { collector } from './collector';
 import { sites } from './api';
 import { gsc } from './gsc';
 import { runRecordedMaintenance } from './maintenance';
+import { runScheduledGscCollection } from './gsc-collector';
 import { deploymentIdentity } from '../shared/revision';
 
 export const app = new Hono<AnalyticsEnv>({ strict: false });
@@ -57,6 +58,12 @@ export default {
   scheduled: (_event: ScheduledController, env: AnalyticsBindings, ctx: ExecutionContext): void => {
     ctx.waitUntil(runRecordedMaintenance(env.ANALYTICS).catch(() => {
       console.error(JSON.stringify({ event: 'maintenance_failed' }));
+    }));
+    // Search Console collection shares this hourly trigger. It records its own
+    // console_job_runs row and never blocks rollups/retention: a failure here is
+    // logged and retried on the next hourly run.
+    ctx.waitUntil(runScheduledGscCollection(env).catch(() => {
+      console.error(JSON.stringify({ event: 'gsc_collection_failed' }));
     }));
   },
 };

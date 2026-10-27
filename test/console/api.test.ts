@@ -298,7 +298,7 @@ describe('job observability', () => {
       jobs: { id: string; schedule: string; next_run_at: string | null; last_attempt: unknown; last_success_at: string | null;
         history: string; stale: boolean; warnings: string[] }[];
     }>();
-    expect(body.jobs).toHaveLength(4);
+    expect(body.jobs).toHaveLength(5);
     const hourly = body.jobs.find(job => job.id === 'signals-hourly')!;
     expect(hourly.history).toBe('recorded');
     expect(hourly.last_attempt).toBeNull();
@@ -308,6 +308,13 @@ describe('job observability', () => {
     const analytics = body.jobs.find(job => job.id === 'analytics-maintenance')!;
     expect(analytics.history).toBe('recorded');
     expect(analytics.next_run_at).toMatch(/:17:00\.000Z$/);
+    // Search Console collection shares the analytics hourly trigger and records
+    // its own history under the same reader.
+    const search = body.jobs.find(job => job.id === 'analytics-search-console')!;
+    expect(search.history).toBe('recorded');
+    expect(search.schedule).toBe('17 * * * *');
+    expect(search.next_run_at).toMatch(/:17:00\.000Z$/);
+    expect(search.warnings).toContain('No successful run recorded');
     const backup = body.jobs.find(job => job.id === 'backup-workflow')!;
     expect(backup.history).toBe('external');
     expect(backup.next_run_at).toMatch(/:37:00\.000Z$/);

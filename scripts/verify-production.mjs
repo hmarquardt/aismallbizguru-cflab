@@ -167,6 +167,11 @@ function analyticsChecks(revision, origins) {
       note: 'a 503 here means the CFLAB service binding is not working',
     },
     {
+      name: 'Search Console admin API rejects unauthenticated access',
+      url: `${origins.analytics}/api/gsc/status`, status: 401,
+      note: 'a 404 here means this release does not include the Search Console module',
+    },
+    {
       name: 'canonical collector answers an unknown Site without recording',
       url: `${origins.analytics}/collect`, method: 'POST', body: { site: UNKNOWN_SITE }, status: 204,
       verify: emptyBody(),

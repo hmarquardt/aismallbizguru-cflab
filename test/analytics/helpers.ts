@@ -115,6 +115,13 @@ export async function resetData(): Promise<void> {
     bindings.ANALYTICS.prepare('DELETE FROM analytics_daily_pages'),
     bindings.ANALYTICS.prepare('DELETE FROM analytics_daily_referrers'),
     bindings.ANALYTICS.prepare('DELETE FROM analytics_daily_events'),
+    // Search Console tables reference analytics_sites, so they are cleared first.
+    bindings.ANALYTICS.prepare('DELETE FROM gsc_daily_totals'),
+    bindings.ANALYTICS.prepare('DELETE FROM gsc_query_daily'),
+    bindings.ANALYTICS.prepare('DELETE FROM gsc_page_daily'),
+    bindings.ANALYTICS.prepare('DELETE FROM gsc_breakdown_daily'),
+    bindings.ANALYTICS.prepare('DELETE FROM gsc_properties'),
+    bindings.ANALYTICS.prepare('DELETE FROM gsc_sync_state'),
     bindings.ANALYTICS.prepare('DELETE FROM analytics_domains WHERE site_id NOT IN (1, 2)'),
     bindings.ANALYTICS.prepare('DELETE FROM analytics_sites WHERE id NOT IN (1, 2)'),
     bindings.ANALYTICS.prepare('UPDATE analytics_sites SET active = 1, respect_dnt = 1, respect_gpc = 1, raw_retention_days = 90, timezone = \'UTC\' WHERE id IN (1, 2)'),

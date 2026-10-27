@@ -6,6 +6,7 @@ import { authenticate, requireRole, siteRole } from './auth';
 import { domainsForSite, findSiteByRef, primaryDomain, siteOutput, type DomainRow, type SiteRow } from './sites';
 import { newPublicId, normalizeHostname, slugFromName, validSlug, validTimezone, cleanText } from './sanitize';
 import { reporting } from './reporting';
+import { searchReports } from './gsc-reporting';
 
 const SITE_FIELDS = ['name', 'slug', 'timezone', 'active', 'respect_dnt', 'respect_gpc', 'raw_retention_days'];
 const CANONICAL_ORIGIN = 'https://analytics.aismallbizguru.com';
@@ -76,6 +77,7 @@ sites.post('/', async c => {
 sites.use('/:site/*', loadSite);
 sites.use('/:site', loadSite);
 sites.route('/:site', reporting);
+sites.route('/:site', searchReports);
 
 sites.get('/:site', async c => {
   const site = c.get('site');

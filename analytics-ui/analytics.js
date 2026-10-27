@@ -154,6 +154,7 @@ async function loadIdentity() {
     state.isAdmin = !!(data && data.user && data.user.is_admin);
     setText($('#account-email'), state.email);
     show($('#new-site'), state.isAdmin);
+    show($('#gsc-check'), state.isAdmin);
   } catch {
     /* identity display is optional */
   }
@@ -1181,6 +1182,33 @@ function wire() {
   $('#refresh').addEventListener('click', () => {
     state.loaded = {};
     loadActiveTab({ force: true });
+  });
+
+  $('#gsc-check').addEventListener('click', async () => {
+    const button = $('#gsc-check');
+    const container = $('#gsc-results');
+    button.disabled = true;
+    show(container, true);
+    clear(container);
+    container.append(h('p', { text: 'Checking Google Search Console access…' }));
+    try {
+      const result = await api('/api/gsc/properties');
+      clear(container);
+      container.append(h('h2', { text: 'Google Search Console access' }));
+      container.append(h('p', { text: result.count + ' accessible properties' }));
+      if (Array.isArray(result.properties)) {
+        const list = h('ul');
+        for (const property of result.properties) {
+          list.append(h('li', { text: property.siteUrl + ' — ' + property.permissionLevel }));
+        }
+        container.append(list);
+      }
+    } catch (error) {
+      clear(container);
+      container.append(h('p', { text: 'Connection failed: ' + friendlyError(error) }));
+    } finally {
+      button.disabled = false;
+    }
   });
 
   $('#new-site').addEventListener('click', () => openNewSiteDialog());

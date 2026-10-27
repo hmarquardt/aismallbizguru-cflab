@@ -54,6 +54,7 @@
         <button id="refresh" type="button" class="button button-secondary" title="Refresh data">Refresh</button>
       </div>
       <div class="header-account">
+        <button id="gsc-check" type="button" class="button button-secondary" hidden>Check Search Console</button>
         <button id="new-site" type="button" class="button button-secondary" hidden>New site</button>
         <span id="account-email" class="account-email"></span>
         <button id="sign-out" type="button" class="button button-ghost">Sign out</button>
@@ -63,6 +64,7 @@
   </header>
 
   <div id="app-banner" class="banner" role="alert" hidden></div>
+  <section id="gsc-results" class="card" aria-live="polite" style="margin: 1rem auto; max-width: 960px; padding: 1rem;" hidden></section>
 
   <main class="app-main">
     <section id="panel-overview" class="panel-view" role="tabpanel" aria-labelledby="tab-overview">

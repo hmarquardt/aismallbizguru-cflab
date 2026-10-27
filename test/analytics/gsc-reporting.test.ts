@@ -3,7 +3,7 @@ import { bindings, call, migrate, resetData, seedHuman, seedMembership, testEnv,
 import { GSC_PROPERTIES } from '../../src/analytics/gsc-properties';
 import type { AnalyticsBindings } from '../../src/analytics/env';
 
-const SLUG = 'fruitingforecast';
+const SLUG = 'fruiting-forecast';
 const PROPERTY = 'sc-domain:fruitingforecast.com';
 const OTHER_PROPERTY = 'sc-domain:worthlookingup.com';
 const SECRET = '{"client_email":"never-return-this@project.iam.gserviceaccount.com","private_key":"-----BEGIN PRIVATE KEY-----secret"}';
@@ -252,13 +252,22 @@ describe('Search Console aggregates', () => {
     const admin = await tokenFor(true);
     const response = await get('/api/gsc/status', admin);
     expect(response.status).toBe(200);
-    const body = await response.json<{ properties: { property: string; mapped: boolean }[]; mapping: { mapped: number; unmapped: string[] }; configured: boolean; sync: { last_success_at: string | null } }>();
+    const body = await response.json<{
+      properties: { property: string; mapped: boolean }[];
+      mapping: { mapped: number; unmapped: string[]; unresolved: string[] };
+      configured: boolean; sync: { last_success_at: string | null };
+    }>();
     expect(body.properties).toHaveLength(GSC_PROPERTIES.length);
     expect(body.mapping.mapped).toBe(1);
-    expect(body.mapping.unmapped).toHaveLength(GSC_PROPERTIES.length - 1);
-    expect(body.mapping.unmapped).toEqual(expect.arrayContaining([
+    // Two properties are deliberately not linked to a Site ...
+    expect(body.mapping.unmapped).toEqual([
       'sc-domain:roadnaturalist.com', 'sc-domain:hankmarquardt.com',
-    ]));
+    ]);
+    // ... and the three reviewed slugs that have no Site in this database are
+    // reported as an unresolved mapping instead of being silently hidden.
+    expect(body.mapping.unresolved).toEqual([
+      'sc-domain:aismallbizguru.com', 'sc-domain:turkeyvulturesoftware.com', 'sc-domain:worthlookingup.com',
+    ]);
     expect(body.configured).toBe(false);
     expect(body.sync.last_success_at).toBeNull();
   });

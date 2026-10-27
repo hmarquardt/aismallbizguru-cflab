@@ -101,7 +101,11 @@ gsc.get('/status', async c => {
     mapping: {
       properties: properties.length,
       mapped: properties.filter(item => item.mapped).length,
-      unmapped: properties.filter(item => !item.mapped).map(item => item.property),
+      // Deliberately not linked to any Site.
+      unmapped: properties.filter(item => !item.site_slug).map(item => item.property),
+      // A reviewed mapping whose Site slug does not exist: a configuration error an
+      // administrator must fix, and never silently treated as "not mapped".
+      unresolved: properties.filter(item => item.site_slug && !item.mapped).map(item => item.property),
     },
     sync: {
       last_attempt_at: sync?.last_run_started_at ?? null,

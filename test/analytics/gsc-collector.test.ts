@@ -188,7 +188,7 @@ async function resetGsc(): Promise<void> {
 }
 
 // The four properties that have an Analytics Site, matching src/analytics/gsc-properties.ts.
-const MAPPED_SLUGS = ['aismallbizguru', 'turkeyvulturesoftware', 'worthlookingup', 'fruitingforecast'];
+const MAPPED_SLUGS = ['aismallbizguru', 'turkeyvulturesoftware', 'worthlookingup', 'fruiting-forecast'];
 
 async function seedMappedSites(): Promise<void> {
   for (const slug of MAPPED_SLUGS) {
@@ -197,7 +197,7 @@ async function seedMappedSites(): Promise<void> {
          (public_id, slug, name, timezone, active, respect_dnt, respect_gpc, raw_retention_days, created_by_user_id, created_at_ms, updated_at_ms)
        VALUES (?, ?, ?, 'UTC', 1, 1, 1, 90, 'system:test', ?, ?)
        ON CONFLICT(slug) DO NOTHING`)
-      .bind(`as_${slug}`, slug, slug, Date.now(), Date.now()).run();
+      .bind(`as_${slug.replace(/-/g, '_')}`, slug, slug, Date.now(), Date.now()).run();
   }
 }
 

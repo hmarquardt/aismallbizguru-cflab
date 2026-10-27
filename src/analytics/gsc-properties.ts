@@ -33,7 +33,7 @@ export const GSC_PROPERTIES: readonly GscPropertyDefinition[] = [
   { property: 'sc-domain:hankmarquardt.com', label: 'Hank Marquardt', siteSlug: null },
   { property: 'sc-domain:turkeyvulturesoftware.com', label: 'Turkey Vulture Software', siteSlug: 'turkeyvulturesoftware' },
   { property: 'sc-domain:worthlookingup.com', label: 'Worth Looking Up', siteSlug: 'worthlookingup' },
-  { property: 'sc-domain:fruitingforecast.com', label: 'Fruiting Forecast', siteSlug: 'fruitingforecast' },
+  { property: 'sc-domain:fruitingforecast.com', label: 'Fruiting Forecast', siteSlug: 'fruiting-forecast' },
 ] as const;
 
 /** Search Console search type collected. Only web search is requested. */

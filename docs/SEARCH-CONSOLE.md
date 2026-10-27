@@ -32,11 +32,16 @@ mapped here.
 | `sc-domain:hankmarquardt.com` | — | collected, no Site registered |
 | `sc-domain:turkeyvulturesoftware.com` | `turkeyvulturesoftware` | mapped |
 | `sc-domain:worthlookingup.com` | `worthlookingup` | mapped |
-| `sc-domain:fruitingforecast.com` | `fruitingforecast` | mapped |
+| `sc-domain:fruitingforecast.com` | `fruiting-forecast` | mapped |
 
 All six were verified on 2026-10-27 with `siteRestrictedUser` permission. The two
 unmapped properties are still collected, retained and reported by
-`GET /api/gsc/status`; their data is simply not shown under a Site. To map one,
+`GET /api/gsc/status`; their data is simply not shown under a Site.
+`GET /api/gsc/status` separates `unmapped` (deliberately no Site) from
+`unresolved` (a reviewed `siteSlug` that does not exist in `analytics_sites`),
+so a typo or a renamed slug is visible instead of silently hiding data. The
+slugs above are the real production values; `fruiting-forecast` contains a
+hyphen. To map one,
 create the Analytics Site with that slug (`New site` in the dashboard, or
 `POST /api/sites`) and the next collection links it — no code or credential
 change and no backfill restart, because rows are keyed by property. Renaming a

@@ -14,6 +14,7 @@ export interface CflabAuthBinding {
 
 export interface AnalyticsBindings {
   ANALYTICS: D1Database;
+  GSC_SERVICE_ACCOUNT_JSON?: string;
   CFLAB?: CflabAuthBinding;
   RL_ANALYTICS?: RateLimitBinding;
 }

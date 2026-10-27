@@ -3,6 +3,7 @@ import type { AnalyticsBindings, AnalyticsEnv } from './env';
 import { ApiError } from '../http';
 import { collector } from './collector';
 import { sites } from './api';
+import { gsc } from './gsc';
 import { runRecordedMaintenance } from './maintenance';
 import { deploymentIdentity } from '../shared/revision';
 
@@ -48,6 +49,7 @@ app.get('/api/health', c => c.json({ status: 'ok', service: 'cflab-analytics' })
 app.get('/api/version', c => c.json(deploymentIdentity('cflab-analytics', c.env)));
 app.route('/', collector);
 app.route('/api/sites', sites);
+app.route('/api/gsc', gsc);
 
 export default {
   fetch: (request: Request, env: AnalyticsBindings, ctx: ExecutionContext): Response | Promise<Response> =>

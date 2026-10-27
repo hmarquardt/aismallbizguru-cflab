@@ -78,10 +78,10 @@ export function renderKpis(container, metrics) {
     const delta = metric.delta && metric.delta.available
       ? h('span', {
         class: `kpi-delta ${metric.delta.pct > 0 ? 'is-up' : metric.delta.pct < 0 ? 'is-down' : 'is-flat'}`,
-        text: `${metric.delta.pct > 0 ? '+' : ''}${metric.delta.pct}%`,
+        text: metric.delta.deltaText || `${metric.delta.pct > 0 ? '+' : ''}${metric.delta.pct}%`,
         title: 'Compared with the previous period',
       })
-      : h('span', { class: 'kpi-delta is-muted', text: 'No prior data' });
+      : h('span', { class: 'kpi-delta is-muted', text: metric.delta?.deltaText || 'No prior data' });
     container.append(h('div', { class: 'kpi' }, [
       h('span', { class: 'kpi-label', text: metric.label }),
       h('span', { class: 'kpi-value', text: metric.formatted, title: formatNumber(metric.value) }),

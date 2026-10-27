@@ -4,6 +4,7 @@ import {
   shiftDay, daySpan, bucketForSpan, rangeFor, previousRange, delta, formatNumber, formatPercent,
   share, barWidth, metricCards, reportQuery, reportPath, seriesForMetric, pageTotal,
   domainChoices, validTab, formatBucketLabel, stateFromSearch, searchFromState,
+  formatCtr, formatPosition, searchMetricCards, searchSeries, searchRange, searchPropertyChoices, searchState,
 } from '../../analytics-ui/lib.js';
 
 const NOW = new Date('2026-09-20T12:00:00.000Z');
@@ -116,4 +117,75 @@ test('day helpers are stable across month boundaries', () => {
   assert.equal(daySpan('2026-09-01', '2026-09-30'), 30);
   assert.equal(bucketForSpan(2), 'hour');
   assert.equal(bucketForSpan(3), 'day');
+});
+
+test('search formatting never invents a CTR or an average position', () => {
+  assert.equal(formatCtr(0.025), '2.5%');
+  assert.equal(formatCtr(0), '0%');
+  assert.equal(formatCtr(undefined), '0%');
+  assert.equal(formatPosition(6.44), '6.4');
+  assert.equal(formatPosition(null), '—');
+  assert.equal(formatPosition(0), '—');
+});
+
+test('search KPI cards report position in places and CTR in percentage points', () => {
+  const cards = searchMetricCards(
+    { clicks: 9, impressions: 360, ctr: 0.025, position: 6.98 },
+    { clicks: 4, impressions: 200, ctr: 0.02, position: 8.4 },
+  );
+  assert.deepEqual(cards.map(card => card.label), ['Impressions', 'Clicks', 'CTR', 'Avg position']);
+  assert.deepEqual(cards.map(card => card.formatted), ['360', '9', '2.5%', '7.0']);
+  assert.equal(cards[0].delta.pct, 80);
+  assert.equal(cards[2].delta.deltaText, '+0.5 pp');
+  assert.deepEqual(cards[3].delta, { available: true, pct: 16.7, deltaText: '+1.4 places' });
+
+  const noPrior = searchMetricCards({ clicks: 0, impressions: 0, ctr: 0, position: null }, {});
+  assert.deepEqual(noPrior[3].delta, { available: false, pct: 0, deltaText: 'No prior data' });
+  assert.equal(noPrior[3].formatted, '—');
+});
+
+test('search ranges keep their length but end at the newest reportable day', () => {
+  const range = { from: '2026-10-21', to: '2026-10-27', days: 7 };
+  assert.deepEqual(searchRange(range, '2026-10-26'), { from: '2026-10-20', to: '2026-10-26', days: 7 });
+  assert.deepEqual(searchRange(range, '2026-10-27'), range);
+  assert.deepEqual(searchRange(range, null), range, 'unknown freshness falls back to the requested window');
+});
+
+test('search series and property choices are deterministic', () => {
+  const points = [
+    { date: '2026-10-24', clicks: 1, impressions: 40 },
+    { date: '2026-10-26', clicks: 5, impressions: 200 },
+  ];
+  assert.deepEqual(searchSeries(points, 'impressions'), [
+    { label: '2026-10-24', value: 40 },
+    { label: '2026-10-26', value: 200 },
+  ]);
+  assert.deepEqual(searchSeries(undefined, 'clicks'), []);
+  assert.deepEqual(searchPropertyChoices([
+    { property: 'sc-domain:example.com', label: 'Example', mapped: true },
+  ]), [{ value: 'sc-domain:example.com', label: 'Example (sc-domain:example.com)', mapped: true }]);
+  assert.deepEqual(searchPropertyChoices(), []);
+});
+
+test('search state separates missing mapping, missing credentials, and no traffic', () => {
+  assert.equal(searchState({}).code, 'unavailable');
+  assert.equal(searchState({ status: { configured: true, properties: [] } }).code, 'not_mapped');
+  assert.equal(searchState({ status: { configured: false, properties: [{ property: 'p' }] } }).code, 'not_configured');
+  const waiting = searchState({ status: { configured: true, properties: [{ property: 'p' }], sync: { last_success_at: null } } });
+  assert.equal(waiting.code, 'not_synced');
+  const failed = searchState({
+    status: {
+      configured: true, sync: { last_success_at: null },
+      properties: [{ property: 'sc-domain:x.com', last_error_code: 'property_not_accessible' }],
+    },
+  });
+  assert.equal(failed.code, 'sync_failed');
+  assert.ok(failed.message.includes('property_not_accessible'));
+
+  const status = { configured: true, properties: [{ property: 'p' }], sync: { last_success_at: '2026-10-27T12:00:00.000Z' } };
+  const quiet = searchState({ status, summary: { totals: { clicks: 0, impressions: 0 }, freshness: { covered_days: 7 } } });
+  assert.equal(quiet.code, 'no_traffic');
+  assert.ok(quiet.message.includes('7 collected day'));
+  const ready = searchState({ status, summary: { totals: { clicks: 3, impressions: 9 }, freshness: { covered_days: 7 } } });
+  assert.equal(ready.code, 'ready');
 });

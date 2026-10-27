@@ -1,7 +1,8 @@
 import {
-  RANGES, TABS, rangeFor, previousRange, metricCards, reportPath, seriesForMetric,
+  RANGES, TABS, SEARCH_METRICS, rangeFor, previousRange, metricCards, reportPath, seriesForMetric,
   domainChoices, validTab, formatNumber, formatDateTime, stateFromSearch, searchFromState,
-  formatBucketLabel, share,
+  formatBucketLabel, share, searchMetricCards, searchSeries, searchRange, searchPropertyChoices,
+  searchState, formatCtr, formatPosition,
 } from './lib.js';
 import {
   $, clear, show, setText, h, skeleton, endSkeleton, errorBlock, emptyBlock,
@@ -32,6 +33,8 @@ const state = {
   domain: '',
   tab: 'overview',
   metric: 'pageviews',
+  searchMetric: 'impressions',
+  searchProperty: '',
   rangeInfo: null,
   data: {},
   loaded: {},
@@ -275,6 +278,9 @@ function setTab(tab, options = {}) {
     if (button) button.setAttribute('aria-selected', String(active));
     show(panel, active);
   }
+  // Search Console is property-level, not host-level: the Domain filter does not
+  // apply to it and hiding it avoids implying a filter that is not used.
+  show($('#domain-control'), state.tab !== 'search');
   updateUrl();
   stopLive();
   if (state.tab === 'overview') {
@@ -392,6 +398,7 @@ async function loadActiveTab(options = {}) {
   if (state.tab === 'overview') return loadOverview();
   if (state.tab === 'pages') return loadPages();
   if (state.tab === 'acquisition') return loadAcquisition();
+  if (state.tab === 'search') return loadSearch();
   if (state.tab === 'events') return loadEvents();
   if (state.tab === 'settings') return loadSettings();
 }
@@ -780,8 +787,300 @@ async function loadEvents() {
     { key: 'device', label: 'Device', className: 'col-ref', render: event => [event.browser, event.device].filter(Boolean).join(' · ') || '—' },
   ], events));
 }
+/* Search Console */
+
+const SEARCH_LIST_COLUMNS = [
+  { key: 'clicks', label: 'Clicks', className: 'num' },
+  { key: 'impressions', label: 'Impressions', className: 'num' },
+  { key: 'ctr', label: 'CTR', className: 'num' },
+  { key: 'position', label: 'Position', className: 'num' },
+];
+
+function searchMeta(title, value, hint) {
+  return h('div', { class: 'meta-item' }, [
+    h('span', { class: 'meta-label', text: title }),
+    h('span', { class: 'meta-value', text: value, title: hint || value }),
+  ]);
+}
+
+function searchTimestamp(value) {
+  if (!value) return 'Never';
+  const ms = Date.parse(value);
+  return Number.isFinite(ms) ? `${formatDateTime(ms)} UTC` : value;
+}
+
+function searchParams(extra = {}) {
+  const range = searchRange(currentRange(), state.data.searchStatus?.freshness?.newest_reportable_day);
+  return { from: range.from, to: range.to, property: state.searchProperty || undefined, ...extra };
+}
+
+function searchPath(report, params) {
+  return reportPath(state.site.public_id, `search/${report}`, params);
+}
+
+function renderSearchMetricSwitch() {
+  const group = $('#search-metric-switch');
+  clear(group);
+  for (const metric of SEARCH_METRICS) {
+    group.append(h('button', {
+      type: 'button',
+      class: 'segment',
+      text: metric.label,
+      'aria-pressed': String(state.searchMetric === metric.key),
+      onclick: () => {
+        state.searchMetric = metric.key;
+        renderSearchMetricSwitch();
+        renderSearchChart();
+      },
+    }));
+  }
+}
+
+function renderSearchPropertyOptions(choices) {
+  const control = $('#search-property-control');
+  const select = $('#search-property');
+  clear(select);
+  for (const choice of choices) select.append(h('option', { value: choice.value, text: choice.label }));
+  select.value = state.searchProperty || '';
+  show(control, choices.length > 1);
+}
+
+function renderSearchStatus(status) {
+  const container = $('#search-status');
+  clear(container);
+  const property = (status.properties || []).find(item => item.property === state.searchProperty) || (status.properties || [])[0];
+  const grid = h('div', { class: 'meta-grid' });
+  if (!property) {
+    grid.append(searchMeta('Property', 'Not mapped'));
+  } else {
+    grid.append(searchMeta('Property', `${property.label} — ${property.property}`));
+    grid.append(searchMeta('Permission', property.permission_level || 'not yet observed'));
+    grid.append(searchMeta('Last successful sync', searchTimestamp(property.last_success_at || status.sync?.last_success_at)));
+    grid.append(searchMeta('Newest reported day', property.newest_day || 'None yet'));
+    const covered = Number(property.days_covered) || 0;
+    grid.append(searchMeta('Days collected', formatNumber(covered)));
+    grid.append(searchMeta(
+      'Backfill',
+      property.backfill_complete ? 'Complete' : `${formatNumber(covered)} of ~480 days`,
+      'Google publishes about sixteen months of Search Console history.',
+    ));
+    if (property.last_error_code) grid.append(searchMeta('Last error', property.last_error_code));
+  }
+  container.append(grid);
+  const newest = property && property.newest_day;
+  const firstIncomplete = property && property.first_incomplete_day;
+  const provisional = newest && firstIncomplete ? newest >= firstIncomplete : false;
+  setText($('#search-status-note'), newest
+    ? `Google data through ${newest}${provisional ? ' · provisional' : ' · finalized'}`
+    : 'No Search Console days collected yet');
+}
+
 
 /* Settings */
+
+function renderSearchChart() {
+  const data = state.data.searchTimeseries;
+  if (!data) return;
+  const metric = SEARCH_METRICS.find(item => item.key === state.searchMetric) || SEARCH_METRICS[0];
+  const canvas = $('#search-chart');
+  const holder = canvas && canvas.parentElement;
+  if (holder && !holder.querySelector('canvas')) {
+    clear(holder);
+    holder.append(h('canvas', { id: 'search-chart', 'aria-label': `${metric.label} over time` }));
+  }
+  const rendered = renderTimeseries($('#search-chart'), searchSeries(data.points, metric.key), { metricLabel: metric.label });
+  if (!rendered && holder) {
+    clear(holder);
+    holder.append(emptyBlock('Chart unavailable', 'The chart library did not load. The data table below still has the values.'));
+  }
+  const table = $('#search-chart-table');
+  if (table) {
+    clear(table);
+    const rows = (data.points || []).map(point => ({
+      date: formatBucketLabel('day', point.date),
+      impressions: formatNumber(point.impressions),
+      clicks: formatNumber(point.clicks),
+      ctr: formatCtr(point.ctr),
+      position: formatPosition(point.position),
+      state: point.data_state === 'provisional' ? 'provisional' : 'final',
+    }));
+    table.append(dataTable([
+      { key: 'date', label: 'Date' },
+      { key: 'impressions', label: 'Impressions', className: 'num' },
+      { key: 'clicks', label: 'Clicks', className: 'num' },
+      { key: 'ctr', label: 'CTR', className: 'num' },
+      { key: 'position', label: 'Position', className: 'num' },
+      { key: 'state', label: 'Data', className: 'col-state' },
+    ], rows, { emptyMessage: 'No collected days in this range.' }));
+  }
+}
+
+function searchTable(rows, key, label) {
+  return dataTable([
+    { key, label, className: 'col-path' },
+    ...SEARCH_LIST_COLUMNS,
+  ], (rows || []).map(row => ({
+    [key]: row[key],
+    clicks: formatNumber(row.clicks),
+    impressions: formatNumber(row.impressions),
+    ctr: formatCtr(row.ctr),
+    position: formatPosition(row.position),
+  })), { emptyMessage: 'Google reported no search traffic for this period.' });
+}
+
+function renderSearchLists(result) {
+  const failure = friendlyError(result.reason);
+  const containers = [$('#search-queries'), $('#search-pages'), $('#search-devices'), $('#search-countries')];
+  if (result.status !== 'fulfilled') {
+    for (const container of containers) {
+      if (!container) continue;
+      clear(container);
+      container.append(errorBlock(failure, retryCurrent));
+    }
+    return;
+  }
+  const data = result.value || {};
+  const queries = $('#search-queries');
+  clear(queries);
+  queries.append(searchTable(data.queries, 'query', 'Query'));
+  const pages = $('#search-pages');
+  clear(pages);
+  pages.append(searchTable(data.pages, 'page', 'Landing page'));
+  setText($('#search-queries-note'), (data.queries || []).length ? `Top ${formatNumber((data.queries || []).length)}` : '');
+  setText($('#search-pages-note'), (data.pages || []).length ? `Top ${formatNumber((data.pages || []).length)}` : '');
+  const pairs = [[$('#search-devices'), data.devices], [$('#search-countries'), data.countries]];
+  for (const [container, rows] of pairs) {
+    if (!container) continue;
+    clear(container);
+    container.append(barsBlock(rows || [], {
+      label: item => item.value,
+      value: item => item.impressions,
+      secondary: item => `${formatNumber(item.clicks)} clicks`,
+      emptyMessage: 'No Search Console traffic for this period.',
+    }));
+  }
+}
+
+async function loadSearch() {
+  if (!state.site) return;
+  const epoch = state.epoch;
+  const siteRef = state.site.public_id;
+  show($('#search-empty'), false);
+  show($('#search-data'), true);
+  skeleton($('#search-status'), 3);
+  skeleton($('#search-kpis'), 4, 'kpi');
+  skeleton($('#search-chart-table'), 3);
+  for (const id of ['#search-queries', '#search-pages', '#search-devices', '#search-countries']) skeleton($(id), 4);
+  renderSearchMetricSwitch();
+
+  let status;
+  try {
+    status = await api(`/api/sites/${encodeURIComponent(siteRef)}/search/status`);
+  } catch (error) {
+    if (epoch !== state.epoch) return;
+    endSkeleton($('#search-status'));
+    clear($('#search-status'));
+    $('#search-status').append(errorBlock(friendlyError(error), retryCurrent));
+    clear($('#search-kpis'));
+    show($('#search-data'), false);
+    return;
+  }
+  if (epoch !== state.epoch) return;
+  state.data.searchStatus = status;
+
+  const choices = searchPropertyChoices(status.properties);
+  if (!choices.some(choice => choice.value === state.searchProperty)) {
+    state.searchProperty = choices.length ? choices[0].value : '';
+  }
+  renderSearchPropertyOptions(choices);
+  endSkeleton($('#search-status'));
+  renderSearchStatus(status);
+
+  const preliminary = searchState({ status });
+  if (preliminary.code !== 'ready' && preliminary.code !== 'no_traffic') {
+    // Not mapped, not configured, or never synchronized: show why, and do not
+    // request reports that could only return zeros and look like real data.
+    show($('#search-data'), false);
+    const container = $('#search-empty');
+    show(container, true);
+    clear(container);
+    container.append(emptyBlock(preliminary.title, preliminary.message));
+    return;
+  }
+
+  const params = searchParams();
+  const results = await Promise.allSettled([
+    api(searchPath('summary', params)),
+    api(searchPath('timeseries', params)),
+    api(searchPath('queries', { ...params, limit: 20 })),
+    api(searchPath('pages', { ...params, limit: 20 })),
+    api(searchPath('breakdowns', params)),
+  ]);
+  if (epoch !== state.epoch) return;
+
+  const [summaryResult, timeseriesResult, queriesResult, pagesResult, breakdownResult] = results;
+  const summary = summaryResult.status === 'fulfilled' ? summaryResult.value : null;
+  const decision = searchState({ status, summary });
+
+  if (summary) {
+    endSkeleton($('#search-kpis'));
+    renderKpis($('#search-kpis'), searchMetricCards(summary.totals, summary.previous));
+    const freshness = summary.freshness || {};
+    const notes = [];
+    if (Number(freshness.provisional_days) > 0) notes.push(`${formatNumber(freshness.provisional_days)} provisional day(s)`);
+    if (Number(freshness.missing_days) > 0) notes.push(`${formatNumber(freshness.missing_days)} day(s) not collected yet`);
+    if (Number(summary.totals.days) === 0) notes.push('no collected days in this range');
+    setText($('#search-status-note'), notes.length ? notes.join(' · ') : '');
+  } else {
+    clear($('#search-kpis'));
+    $('#search-kpis').append(errorBlock(friendlyError(summaryResult.reason), retryCurrent));
+  }
+
+  if (decision.code === 'no_traffic') {
+    const container = $('#search-empty');
+    show(container, true);
+    clear(container);
+    container.append(emptyBlock(decision.title, decision.message));
+  } else {
+    show($('#search-empty'), false);
+  }
+  show($('#search-data'), true);
+
+  if (timeseriesResult.status === 'fulfilled') {
+    state.data.searchTimeseries = timeseriesResult.value;
+    renderSearchChart();
+  } else {
+    state.data.searchTimeseries = null;
+    const holder = $('#search-chart') && $('#search-chart').parentElement;
+    if (holder) { clear(holder); holder.append(errorBlock(friendlyError(timeseriesResult.reason), retryCurrent)); }
+    clear($('#search-chart-table'));
+  }
+
+  const detailResults = [queriesResult, pagesResult, breakdownResult];
+  if (detailResults.some(result => result.status === 'fulfilled')) {
+    renderSearchLists({
+      status: 'fulfilled',
+      value: {
+        queries: queriesResult.status === 'fulfilled' ? queriesResult.value.queries : [],
+        pages: pagesResult.status === 'fulfilled' ? pagesResult.value.pages : [],
+        devices: breakdownResult.status === 'fulfilled' ? breakdownResult.value.devices : [],
+        countries: breakdownResult.status === 'fulfilled' ? breakdownResult.value.countries : [],
+      },
+    });
+    // A partially failed group still shows which card failed, instead of
+    // presenting an empty list as if Google had reported nothing.
+    const targets = [$('#search-queries'), $('#search-pages'), $('#search-devices')];
+    detailResults.forEach((result, index) => {
+      if (result.status === 'fulfilled') return;
+      const target = targets[index];
+      if (!target) return;
+      clear(target);
+      target.append(errorBlock(friendlyError(result.reason), retryCurrent));
+    });
+  } else {
+    renderSearchLists({ status: 'rejected', reason: queriesResult.reason || pagesResult.reason || breakdownResult.reason });
+  }
+}
 
 function setFormDisabled(form, disabled) {
   for (const control of form.querySelectorAll('input, select, button')) control.disabled = disabled;
@@ -1142,6 +1441,12 @@ function wire() {
     state.domain = event.target.value;
     state.loaded = {};
     updateUrl();
+    loadActiveTab({ force: true });
+  });
+
+  $('#search-property').addEventListener('change', event => {
+    state.searchProperty = event.target.value;
+    state.loaded.search = false;
     loadActiveTab({ force: true });
   });
 

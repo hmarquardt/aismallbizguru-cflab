@@ -207,7 +207,7 @@ test('signs in and renders the overview with real metrics, chart, and lists', as
     assert.equal(app.document.getElementById('app-view').hidden, false);
     assert.equal(app.document.querySelectorAll('.kpi-value')[0].textContent, '12,481');
     assert.equal(app.document.querySelector('.kpi-delta.is-up').textContent, '+24.8%');
-    assert.equal(app.document.querySelectorAll('#tabs .tab').length, 5);
+    assert.equal(app.document.querySelectorAll('#tabs .tab').length, 6);
     assert.equal(app.document.getElementById('account-email').textContent, 'admin@example.com');
     assert.ok(app.FakeChart.instances.length >= 1, 'line chart created');
     assert.equal(app.FakeChart.instances[0].config.type, 'line');

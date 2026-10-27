@@ -36,7 +36,7 @@
           <span class="control-label">Site</span>
           <select id="site-select" aria-label="Site"></select>
         </label>
-        <label class="control">
+        <label class="control" id="domain-control">
           <span class="control-label">Domain</span>
           <select id="domain-select" aria-label="Domain"></select>
         </label>
@@ -132,6 +132,61 @@
         <div class="card">
           <div class="card-header"><h2 class="card-title">Campaigns</h2></div>
           <div id="acquisition-campaigns" class="card-body"></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="panel-search" class="panel-view" role="tabpanel" aria-labelledby="tab-search" hidden>
+      <div id="search-empty" hidden></div>
+      <div id="search-content">
+        <div class="card">
+          <div class="card-header">
+            <h2 class="card-title">Google Search Console</h2>
+            <span id="search-status-note" class="muted"></span>
+            <label class="control" id="search-property-control" hidden>
+              <span class="control-label">Property</span>
+              <select id="search-property" aria-label="Search Console property"></select>
+            </label>
+          </div>
+          <div id="search-status" class="card-body"></div>
+        </div>
+
+        <div id="search-data">
+          <div id="search-kpis" class="kpi-grid"></div>
+
+        <div class="card chart-card">
+          <div class="card-header">
+            <h2 class="card-title">Search performance</h2>
+            <div id="search-metric-switch" class="segmented" role="group" aria-label="Search chart metric"></div>
+          </div>
+          <div class="chart-holder"><canvas id="search-chart" aria-label="Search performance over time"></canvas></div>
+          <details class="chart-data">
+            <summary>View data table</summary>
+            <div id="search-chart-table"></div>
+          </details>
+        </div>
+
+        <div class="two-col">
+          <div class="card">
+            <div class="card-header"><h2 class="card-title">Top search queries</h2><span id="search-queries-note" class="muted"></span></div>
+            <div id="search-queries" class="card-body"></div>
+          </div>
+          <div class="card">
+            <div class="card-header"><h2 class="card-title">Top landing pages</h2><span id="search-pages-note" class="muted"></span></div>
+            <div id="search-pages" class="card-body"></div>
+          </div>
+        </div>
+
+        <div class="two-col">
+          <div class="card">
+            <div class="card-header"><h2 class="card-title">Devices</h2></div>
+            <div id="search-devices" class="card-body"></div>
+          </div>
+          <div class="card">
+            <div class="card-header"><h2 class="card-title">Countries</h2></div>
+            <div id="search-countries" class="card-body"></div>
+          </div>
+        </div>
         </div>
       </div>
     </section>

@@ -420,3 +420,11 @@ a { color: var(--accent); }
 @media (max-width: 560px) {
   .kpi-grid { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* Search Console */
+.meta-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
+.meta-item { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.meta-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+.meta-value { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.panel-view > .card + .card, #search-data > .card + .card, #search-data > .two-col + .two-col { margin-top: 16px; }
+.col-state { width: 104px; }

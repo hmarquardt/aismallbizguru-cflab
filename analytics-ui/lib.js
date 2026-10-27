@@ -13,8 +13,16 @@ export const TABS = [
   { id: 'overview', label: 'Overview' },
   { id: 'pages', label: 'Pages' },
   { id: 'acquisition', label: 'Acquisition' },
+  { id: 'search', label: 'Search' },
   { id: 'events', label: 'Events' },
   { id: 'settings', label: 'Settings' },
+];
+
+// Search Console has two metrics worth plotting; CTR and average position are
+// shown as cards and in the table because neither is additive over days.
+export const SEARCH_METRICS = [
+  { key: 'impressions', label: 'Impressions' },
+  { key: 'clicks', label: 'Clicks' },
 ];
 
 const DAY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
@@ -110,7 +118,7 @@ export function metricCards(summary, previous) {
 
 export function reportQuery(params = {}) {
   const query = new URLSearchParams();
-  for (const key of ['from', 'to', 'domain', 'limit', 'bucket']) {
+  for (const key of ['from', 'to', 'domain', 'limit', 'bucket', 'property']) {
     const value = params[key];
     if (value !== undefined && value !== null && value !== '') query.set(key, String(value));
   }
@@ -196,4 +204,148 @@ export function searchFromState(state) {
   if (state.tab && state.tab !== 'overview') params.set('tab', state.tab);
   const query = params.toString();
   return query ? `?${query}` : '';
+}
+
+/* Search Console ------------------------------------------------------------- */
+
+// Google returns CTR as a fraction and average position as a rank (lower is
+// better). Both are formatted explicitly so a zero CTR is never shown as a bare
+// number and a missing position is never invented as 0.
+export function formatCtr(value) {
+  const fraction = Number(value);
+  if (!Number.isFinite(fraction) || fraction <= 0) return '0%';
+  return `${Math.round(fraction * 1000) / 10}%`;
+}
+
+export function formatPosition(value) {
+  const position = Number(value);
+  if (value === null || value === undefined || !Number.isFinite(position) || position <= 0) return '—';
+  return (Math.round(position * 10) / 10).toFixed(1);
+}
+
+// Average position improves when it gets smaller, so its delta is expressed in
+// positions gained (positive = moved up) instead of a percentage of a rank.
+function positionDelta(current, previous) {
+  const next = Number(current);
+  const prior = Number(previous);
+  if (!Number.isFinite(next) || !Number.isFinite(prior) || next <= 0 || prior <= 0) {
+    return { available: false, pct: 0, deltaText: 'No prior data' };
+  }
+  const change = Math.round((prior - next) * 10) / 10;
+  const pct = Math.round((change / prior) * 1000) / 10;
+  return {
+    available: true,
+    pct,
+    deltaText: change === 0 ? 'No change' : `${change > 0 ? '+' : ''}${change} places`,
+  };
+}
+
+function ctrDelta(current, previous) {
+  const next = Number(current) || 0;
+  const prior = Number(previous) || 0;
+  if (prior <= 0) return { available: false, pct: 0, deltaText: 'No prior data' };
+  const pct = Math.round(((next - prior) / prior) * 1000) / 10;
+  const points = Math.round((next - prior) * 1000) / 10;
+  return {
+    available: true,
+    pct,
+    deltaText: `${points > 0 ? '+' : ''}${points} pp`,
+  };
+}
+
+export function searchMetricCards(totals = {}, previous = {}) {
+  return [
+    {
+      label: 'Impressions',
+      value: Number(totals.impressions) || 0,
+      formatted: formatNumber(totals.impressions),
+      delta: delta(totals.impressions, previous.impressions),
+    },
+    {
+      label: 'Clicks',
+      value: Number(totals.clicks) || 0,
+      formatted: formatNumber(totals.clicks),
+      delta: delta(totals.clicks, previous.clicks),
+    },
+    {
+      label: 'CTR',
+      value: Number(totals.ctr) || 0,
+      formatted: formatCtr(totals.ctr),
+      delta: ctrDelta(totals.ctr, previous.ctr),
+    },
+    {
+      label: 'Avg position',
+      value: Number(totals.position) || 0,
+      formatted: formatPosition(totals.position),
+      delta: positionDelta(totals.position, previous.position),
+    },
+  ];
+}
+
+export function searchSeries(points, metric) {
+  return (points || []).map(point => ({
+    label: point.date,
+    value: Number(point[metric]) || 0,
+  }));
+}
+
+// Search Console only reports completed days. "Last 7 days" therefore means the
+// seven most recent days Google has data for, keeping the requested window length
+// instead of silently showing an empty final day.
+export function searchRange(range, newestReportableDay) {
+  const fallback = { from: range.from, to: range.to, days: range.days };
+  if (!validDay(newestReportableDay) || !validDay(range.to)) return fallback;
+  const to = range.to > newestReportableDay ? newestReportableDay : range.to;
+  return { from: shiftDay(to, -(range.days - 1)), to, days: range.days };
+}
+
+export function searchPropertyChoices(properties) {
+  return (properties || []).map(property => ({
+    value: property.property,
+    label: `${property.label} (${property.property})`,
+    mapped: !!property.mapped,
+  }));
+}
+
+// A single place that decides what the Search tab should say. Having no traffic
+// is a normal state for a newly connected property; a missing mapping, missing
+// credentials, and a failed synchronization are different states with different
+// remedies, and none of them is presented as zero traffic.
+export function searchState({ status, summary } = {}) {
+  if (!status) return { code: 'unavailable', title: 'Search Console status unavailable', message: 'Reload to try again.' };
+  if (!status.properties || !status.properties.length) {
+    return {
+      code: 'not_mapped',
+      title: 'No Search Console property is mapped to this Site',
+      message: 'Search Console data is collected per property. Add this Site\'s domain as a verified Search Console property and map it in the CFLab property list.',
+    };
+  }
+  if (status.configured === false) {
+    return {
+      code: 'not_configured',
+      title: 'Search Console credentials are not configured',
+      message: 'The server has no Google service account. Collection cannot run until an administrator installs it; no search data is shown.',
+    };
+  }
+  const failed = (status.properties || []).find(property => property.last_error_code);
+  if (!status.sync || !status.sync.last_success_at) {
+    return {
+      code: failed ? 'sync_failed' : 'not_synced',
+      title: failed ? 'Search Console synchronization failed' : 'Waiting for the first synchronization',
+      message: failed
+        ? `Google reported ${failed.last_error_code} for ${failed.property}. The next scheduled run retries automatically.`
+        : 'The hourly collector has not completed a run for this property yet. Data appears after the first successful synchronization.',
+    };
+  }
+  if (summary && Number(summary.totals?.impressions) === 0 && Number(summary.totals?.clicks) === 0) {
+    const covered = Number(summary.freshness?.covered_days) || 0;
+    return {
+      code: 'no_traffic',
+      title: 'No search traffic reported for this period',
+      message: covered > 0
+        ? `Google reported no impressions for ${formatNumber(covered)} collected day(s) in this range. New properties can take a few days to report, and a site with no indexed pages has nothing to show.`
+        : 'No days in this range have been collected yet. The collector fills recent days first and then backfills history.',
+    };
+  }
+  return { code: 'ready', title: '', message: '' };
 }

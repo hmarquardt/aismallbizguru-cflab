@@ -1,18 +1,16 @@
 // The authoritative Google Search Console property list for CFLab Analytics.
 //
-// These six Domain properties were verified on 2026-10-27 with the existing
-// service account (`siteRestrictedUser` on every one). The list is deliberately
-// a reviewed constant rather than a discovery result: a request must never be
-// able to widen what CFLab reads, and a newly accessible Google property must
-// not appear in the dashboard until someone maps it here.
+// These seven Domain properties were verified with the existing service account
+// (`siteRestrictedUser` on each). The list is deliberately a reviewed constant
+// rather than a discovery result: a request must never be able to widen what
+// CFLab reads, and a newly accessible Google property must not appear in the
+// dashboard until someone maps it here.
 //
-// `siteSlug` is the explicit link to a CFLab Analytics Site (`analytics_sites
-// .slug`). Two properties have no Site yet:
-//
-// Every property is linked to a Site. Two were provisioned later than the rest
-// (2026-10-27, Road Naturalist and Hank Marquardt), which is why the mapping is
-// separate from the Site rows: a property collected before its Site existed keeps
-// its retained history and is linked by the next collection run.
+// Every property is linked to a Site. Elastic Banana was verified and granted
+// Restricted access on 2026-10-31 and maps to the `elasticbanana` Site. Road
+// Naturalist and Hank Marquardt were provisioned later (2026-10-27), which is
+// why the mapping is separate from the Site rows: a property collected before
+// its Site existed keeps its retained history and is linked by the next run.
 //
 // Their Search Console data is collected, retained and observable even when a Site
 // has no first-party tracking. Setting `siteSlug` explicitly is the only way to
@@ -29,6 +27,7 @@ export interface GscPropertyDefinition {
 }
 
 export const GSC_PROPERTIES: readonly GscPropertyDefinition[] = [
+  { property: 'sc-domain:elasticbanana.com', label: 'Elastic Banana', siteSlug: 'elasticbanana' },
   { property: 'sc-domain:aismallbizguru.com', label: 'AI Small Business Guru', siteSlug: 'aismallbizguru' },
   { property: 'sc-domain:roadnaturalist.com', label: 'Road Naturalist', siteSlug: 'roadnaturalist' },
   { property: 'sc-domain:hankmarquardt.com', label: 'Hank Marquardt', siteSlug: 'hankmarquardt' },

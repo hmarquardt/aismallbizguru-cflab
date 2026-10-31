@@ -43,6 +43,8 @@ separates `unmapped` (deliberately no Site) from `unresolved` (a reviewed
 is visible instead of silently hiding data. The slugs above are the real
 production values; `fruiting-forecast` contains a hyphen.
 
+Sitemap submission is separate from read-only search analytics. A `PUT` to the Search Console sitemaps API using the service-account write scope returned `403` for `sc-domain:elasticbanana.com` with the current `siteRestrictedUser` permission. Submit the sitemap with an account holding Full/Owner permission, or elevate the service account to Full. The collector only needs read access.
+
 Hank Marquardt has **no first-party tracking**: its site policy forbids client
 JavaScript and analytics, and its CSP has no `script-src`. Search Console data is
 still collected for it because that collection is server-to-server and needs no

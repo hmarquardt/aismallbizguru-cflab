@@ -415,12 +415,16 @@ node scripts/ci/verify-deployment-target.mjs --config-only
 CLOUDFLARE_D1_API_TOKEN=<token> node scripts/ci/migration-gate.mjs
 CLOUDFLARE_D1_API_TOKEN=<token> node scripts/ci/migration-gate.mjs --apply
 
-# Publish both Workers with the same flags the pipeline uses
-npx wrangler deploy --config wrangler.jsonc --no-x-provision --tag "$(git rev-parse HEAD)"
-npx wrangler deploy --config wrangler.analytics.jsonc --no-x-provision --tag "$(git rev-parse HEAD)"
+# Publish both Workers with the same flags the pipeline uses.
+# DEPLOY_REVISION is required: --tag alone does not populate GET /api/version.
+release_sha="$(git rev-parse HEAD)"
+npx wrangler deploy --config wrangler.jsonc --no-x-provision \
+  --var "DEPLOY_REVISION:$release_sha" --tag "$release_sha"
+npx wrangler deploy --config wrangler.analytics.jsonc --no-x-provision \
+  --var "DEPLOY_REVISION:$release_sha" --tag "$release_sha"
 
 # Verify exactly what the pipeline verifies
-node scripts/verify-production.mjs --service all --revision "$(git rev-parse HEAD)"
+node scripts/verify-production.mjs --service all --revision "$release_sha"
 ```
 
 Keep `--no-x-provision` (never provision replacements), keep `--tag` (so the

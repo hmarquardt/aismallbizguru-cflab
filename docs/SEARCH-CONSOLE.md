@@ -44,6 +44,8 @@ separates `unmapped` (deliberately no Site) from `unresolved` (a reviewed
 is visible instead of silently hiding data. The slugs above are the real
 production values; `fruiting-forecast` contains a hyphen.
 
+The BirdAhead mapping was released as `2a6d74c`. The normal pipeline's primary-Worker verification was blocked by pre-existing `Bitcoin Signals` 500 responses, so only the Analytics Worker was published through the documented emergency path; all 10 Analytics production checks passed. The mapping does not alter the public Site registration: one `birdahead` Site (id 10), one apex domain and one `www` alias were verified directly in D1 before release.
+
 Sitemap submission is separate from read-only search analytics. A `PUT` to the Search Console sitemaps API using the service-account write scope returned `403` for `sc-domain:elasticbanana.com` with the current `siteRestrictedUser` permission. Submit the sitemap with an account holding Full/Owner permission, or elevate the service account to Full. The collector only needs read access.
 
 Hank Marquardt has **no first-party tracking**: its site policy forbids client

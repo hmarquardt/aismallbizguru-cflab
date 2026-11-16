@@ -34,8 +34,9 @@ mapped here.
 | `sc-domain:turkeyvulturesoftware.com` | `turkeyvulturesoftware` | mapped |
 | `sc-domain:worthlookingup.com` | `worthlookingup` | mapped |
 | `sc-domain:fruitingforecast.com` | `fruiting-forecast` | mapped |
+| `sc-domain:birdahead.com` | `birdahead` | mapped |
 
-All seven are mapped to an Analytics Site. The original six were verified on 2026-10-27 with `siteRestrictedUser` permission; Elastic Banana was verified and granted Restricted access on 2026-10-31. Road Naturalist and Hank Marquardt were the
+All eight are mapped to an Analytics Site. The original six were verified on 2026-10-27 with `siteRestrictedUser` permission; Elastic Banana was verified and granted Restricted access on 2026-10-31. BirdAhead was added on 2026-11-16 after its Domain property was verified and the existing service account was granted access. Road Naturalist and Hank Marquardt were the
 last two: their Sites were provisioned on 2026-10-27 (ids 7 and 8), so the same
 collection table now feeds the dashboard for every property. `GET /api/gsc/status`
 separates `unmapped` (deliberately no Site) from `unresolved` (a reviewed
@@ -159,7 +160,7 @@ Administrator only:
 
 ```text
 GET  /api/gsc/properties   connectivity probe (existing behavior)
-GET  /api/gsc/status       all seven properties, mapping, coverage, last sync
+GET  /api/gsc/status       all eight properties, mapping, coverage, last sync
 POST /api/gsc/sync         bounded manual run; {"scope":"daily"|"backfill"|"full"}
 ```
 
@@ -205,7 +206,7 @@ identifiers, and no query string, cookie, IP address or user agent is written.
   CFLab administrator. The manual trigger is limited to four runs per hour, one
   run at a time, with the same request and time budgets as the cron.
 * A request can never name an arbitrary Google property, binding, table or SQL
-  statement: the property must be one of the reviewed seven **and** mapped to the
+  statement: the property must be one of the reviewed eight **and** mapped to the
   requesting Site.
 
 ## Dashboard
@@ -265,7 +266,7 @@ the role check.
 curl -s -H "Authorization: Bearer $CFLU" \
   https://analytics.aismallbizguru.com/api/gsc/properties
 
-# Mapping, coverage and last sync for all seven properties
+# Mapping, coverage and last sync for all eight properties
 curl -s -H "Authorization: Bearer $CFLU" \
   https://analytics.aismallbizguru.com/api/gsc/status
 

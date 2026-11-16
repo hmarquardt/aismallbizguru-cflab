@@ -262,7 +262,7 @@ describe('Search Console aggregates', () => {
     // deliberately unlinked any more.
     expect(body.mapping.unmapped).toEqual([]);
     expect(body.mapping.mapped).toBe(1);
-    // The six reviewed slugs with no Site in this test database are reported as
+    // The seven reviewed slugs with no Site in this test database are reported as
     // an unresolved mapping instead of being silently hidden.
     expect(new Set(body.mapping.unresolved)).toEqual(new Set([
       'sc-domain:elasticbanana.com',
@@ -271,6 +271,7 @@ describe('Search Console aggregates', () => {
       'sc-domain:worthlookingup.com',
       'sc-domain:roadnaturalist.com',
       'sc-domain:hankmarquardt.com',
+      'sc-domain:birdahead.com',
     ]));
     expect(body.configured).toBe(false);
     expect(body.sync.last_success_at).toBeNull();

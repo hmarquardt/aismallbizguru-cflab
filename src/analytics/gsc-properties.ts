@@ -1,6 +1,6 @@
 // The authoritative Google Search Console property list for CFLab Analytics.
 //
-// These seven Domain properties were verified with the existing service account
+// These eight Domain properties were verified with the existing service account
 // (`siteRestrictedUser` on each). The list is deliberately a reviewed constant
 // rather than a discovery result: a request must never be able to widen what
 // CFLab reads, and a newly accessible Google property must not appear in the
@@ -34,6 +34,7 @@ export const GSC_PROPERTIES: readonly GscPropertyDefinition[] = [
   { property: 'sc-domain:turkeyvulturesoftware.com', label: 'Turkey Vulture Software', siteSlug: 'turkeyvulturesoftware' },
   { property: 'sc-domain:worthlookingup.com', label: 'Worth Looking Up', siteSlug: 'worthlookingup' },
   { property: 'sc-domain:fruitingforecast.com', label: 'Fruiting Forecast', siteSlug: 'fruiting-forecast' },
+  { property: 'sc-domain:birdahead.com', label: 'BirdAhead', siteSlug: 'birdahead' },
 ] as const;
 
 /** Search Console search type collected. Only web search is requested. */

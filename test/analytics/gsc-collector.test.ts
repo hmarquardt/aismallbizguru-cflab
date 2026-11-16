@@ -188,7 +188,7 @@ async function resetGsc(): Promise<void> {
 }
 
 // The four properties that have an Analytics Site, matching src/analytics/gsc-properties.ts.
-const MAPPED_SLUGS = ['aismallbizguru', 'turkeyvulturesoftware', 'worthlookingup', 'fruiting-forecast', 'roadnaturalist', 'hankmarquardt'];
+const MAPPED_SLUGS = ['aismallbizguru', 'turkeyvulturesoftware', 'worthlookingup', 'fruiting-forecast', 'roadnaturalist', 'hankmarquardt', 'birdahead'];
 
 async function seedMappedSites(): Promise<void> {
   for (const slug of MAPPED_SLUGS) {
@@ -330,6 +330,7 @@ describe('collection', () => {
       ['sc-domain:roadnaturalist.com', 'roadnaturalist'],
       ['sc-domain:hankmarquardt.com', 'hankmarquardt'],
       ['sc-domain:fruitingforecast.com', 'fruiting-forecast'],
+      ['sc-domain:birdahead.com', 'birdahead'],
     ] as const) {
       const site = await bindings.ANALYTICS.prepare('SELECT id FROM analytics_sites WHERE slug = ?').bind(slug)
         .first<{ id: number }>();

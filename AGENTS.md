@@ -55,6 +55,43 @@ commands are in [DEPLOYMENT.md](docs/DEPLOYMENT.md).
   alphabetical dump failed every remote D1 restore). The procedures and the retention
   policy are in [BACKUP-RESTORE.md](docs/BACKUP-RESTORE.md).
 
+## Release completion and partial-deployment recovery (required)
+
+A passing validation job, a successful individual Worker upload, or a documented
+emergency exception is **not** a completed production release. A release is
+complete only when both Workers report the same intended commit from `main`
+**and** the full read-only production verification succeeds.
+
+* **Check before and after release:** inspect the latest deploy job's per-step
+  result, run `node scripts/verify-production.mjs --service all`, and run
+  `node scripts/verify-drift.mjs` from a full checkout of `main`. The post-release
+  checks must confirm both Worker revisions agree with the released SHA. Record
+  the checks and commit in the task's final report.
+* **If a release stops after publishing either Worker, treat it as an active
+  partial-release incident in the same task.** Capture the deployed revisions,
+  failed step and exact error; investigate the underlying production failure;
+  and reconcile both Workers through the existing, gated, fully validated
+  release pipeline once safe. Never assume another push or tomorrow's scheduled
+  drift check will repair it.
+* **HTTP 500 or inconsistent security/health probes are production failures, not
+  permission to skip checks.** Diagnose and correct the cause; do not relax
+  verification, suppress drift alerts, or deploy the remaining Worker around a
+  failed gate. If a code fix is required, validate it and release through the
+  same protected procedure.
+* **Emergency single-Worker exceptions are still open incidents.** Document why
+  only one Worker was published and verify that Worker, but do not label the
+  deployment reconciled. Track an owner, the exact blocked next action, and an
+  immediate follow-up to restore one verified revision. If completing safely is
+  impossible in the current session, escalate and explicitly report that
+  production remains split; do not leave a passive "wait for next change" plan.
+* **Respect the existing authorization boundary.** Never flip
+  `CLOUDFLARE_DEPLOY_ENABLED` or bypass the deployment/migration gates to close
+  an incident. If the gate is disabled or required Cloudflare access is absent,
+  report the blocker and give the operator the precise, gated release procedure.
+  Do not claim the incident is fixed until the live postconditions are verified.
+
+Follow [CI-CD.md → Interrupted releases and release sign-off](docs/CI-CD.md#interrupted-releases-and-release-sign-off)
+for the concrete recovery sequence.
 ## What an agent must not do
 
 * Do not run `wrangler deploy`, `wrangler versions deploy`, or

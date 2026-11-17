@@ -125,6 +125,77 @@ One release runs at a time (`concurrency: release-<ref>`,
 `cancel-in-progress: false`), so two pushes cannot interleave deployments and an
 in-progress release is never cancelled.
 
+## Interrupted releases and release sign-off
+
+**Release success is a production state, not a GitHub workflow label.** A green
+`validate` job with a skipped `deploy production` job changes nothing in
+production. The two Workers must share one released `main` revision, and the
+production probes must pass before the release task can be closed.
+
+### Same-task completion checklist
+
+1. Read the `deploy production` job's per-step outcomes, including the
+   always-run release summary. Confirm the deployment gate actually allowed a
+   deployment; `success` on the overall workflow can mean validation succeeded
+   while deployment was **skipped**.
+2. In a full, current checkout of `main`, run these credential-free, read-only
+   checks immediately, not at the next daily schedule:
+
+   ```sh
+   node scripts/verify-production.mjs --service all
+   node scripts/verify-drift.mjs
+   ```
+
+   Both must pass. Verify the primary and Analytics `/api/version` results are
+   the **same intended release SHA**, not merely two unrelated commits that both
+   happen to be in `main`.
+3. Record the actual SHA, both live revisions, probe verdicts and deployment
+   outcome in the release handoff. An unverified version, a failed probe or a
+   revision split means **open incident**, not `done`.
+
+### When one Worker has already been published and verification fails
+
+1. **Stop and capture state immediately:** name the successful deploy, its
+   reported commit/version, the failed verification step, its exact HTTP or
+   runtime error, and the other Worker's reported revision. Review Cloudflare
+   runtime logs and dependent service/D1 health as appropriate. Do not infer
+   "transient" merely from intermittent failures or repeated retries.
+2. **Repair the actual blocker**, validate the fix, and arrange a complete,
+   gated release of the *same approved commit* to **both** Workers using the
+   normal `validate and deploy` workflow. The primary Worker is verified
+   before Analytics for a reason; never skip a failed primary verification to
+   force the second deploy. Do not bypass migrations, secret guards, or tests.
+3. If production is unhealthy and a safe full release is not immediately
+   possible, escalate the operational decision (including a separately
+   authorized rollback, if appropriate). Do not perform an unreviewed rollback
+   or ad hoc single-Worker deployment. Keep the partial-release incident open
+   with an owner, concrete next action, and immediate follow-up; specifically
+   **do not wait for a routine code change to reconcile it**.
+4. After recovery, rerun both read-only commands above. Close the incident
+   only when both services are healthy, both production verifications pass,
+   and their reported revisions match the approved release. The daily
+   `production drift check` is a safeguard, **not** a release-completion step
+   or a substitute for the immediate verification.
+
+The repository variable `CLOUDFLARE_DEPLOY_ENABLED` is deliberately protected.
+A disabled gate must be handled through the documented operator-controlled
+release process; an agent must never silently set it to `true` to make a
+partial release disappear.
+
+### November 16–17, 2026 example
+
+Run [#43](https://github.com/hmarquardt/aismallbizguru-cflab/actions/runs/43906457887)
+published primary `2a6d74c`, but primary verification intermittently returned
+HTTP 500 instead of the expected 401/200 for Bitcoin Signals, application
+authorization, or public projections. The job stopped before Analytics.
+Runs #44–46 passed validation but skipped deployment; a separately authorized
+emergency Analytics deployment reached `ea30561`. The next scheduled drift
+check [#33](https://github.com/hmarquardt/aismallbizguru-cflab/actions/runs/44074145029)
+correctly failed on the split. The new revision did not itself establish that
+the intermittent primary HTTP 500 issue was fixed. This example is an
+**unreconciled partial release**, not a precedent for ignoring a daily alarm.
+See [SEARCH-CONSOLE.md](SEARCH-CONSOLE.md) for the emergency deployment record.
+
 ## Migration safety
 
 D1 applies every pending migration in a directory in filename order, so the

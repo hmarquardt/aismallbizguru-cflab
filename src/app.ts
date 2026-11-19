@@ -42,7 +42,10 @@ export function createApp(adminAuth: MiddlewareHandler<ContextEnv>) {
       if (error.status === 401) c.header('WWW-Authenticate', 'Bearer');
       return c.json({ error: { code: error.code, message: error.message } }, error.status);
     }
-    console.error(JSON.stringify({ event: 'internal_error' }));
+    // Classify the known dependency failure without logging SQL, parameters,
+    // tokens, or the raw upstream message. The response remains generic.
+    const d1Overloaded = error.message.includes('D1 DB is overloaded.');
+    console.error(JSON.stringify({ event: 'internal_error', ...(d1Overloaded ? { dependency: 'd1', reason: 'overloaded' } : {}) }));
     return c.json({ error: { code: 'internal_error', message: 'Internal server error' } }, 500);
   });
   app.notFound(c => c.json({ error: { code: 'not_found', message: 'Route not found' } }, 404));

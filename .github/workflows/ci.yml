@@ -67,6 +67,9 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
+        with:
+          # Release drift verification checks the revision's ancestry on main.
+          fetch-depth: 0
       - uses: actions/setup-node@v7
         with:
           node-version: '24'
@@ -121,7 +124,10 @@ jobs:
       # authentication boundary, the public projections, and the cutover hostname.
       - name: Verify primary CFLab production
         id: verify_primary
-        run: node scripts/verify-production.mjs --service cflab --revision "$GITHUB_SHA" --wait
+        run: |
+          set -euo pipefail
+          node scripts/verify-production.mjs --service cflab --revision "$GITHUB_SHA" --wait \
+            2>&1 | tee "$RUNNER_TEMP/cflab-release/primary-verify.log"
 
       # 7. Publish the Analytics Worker. CFLab is deployed first so the
       # HumanAuthService entrypoint the service binding needs already exists.
@@ -144,9 +150,31 @@ jobs:
       # dashboard assets, the CFLAB service binding, and both collect routes.
       - name: Verify Analytics production
         id: verify_analytics
-        run: node scripts/verify-production.mjs --service analytics --revision "$GITHUB_SHA" --wait
+        run: |
+          set -euo pipefail
+          node scripts/verify-production.mjs --service analytics --revision "$GITHUB_SHA" --wait \
+            2>&1 | tee "$RUNNER_TEMP/cflab-release/analytics-verify.log"
 
-      # 9. Record the release even if a later step failed. The verdict and the
+      # 9. Recheck both Workers together after the last upload. Per-Worker checks
+      # alone do not establish that the complete release is healthy now.
+      - name: Verify the complete production release
+        id: verify_release
+        run: |
+          set -euo pipefail
+          node scripts/verify-production.mjs --service all --revision "$GITHUB_SHA" \
+            2>&1 | tee "$RUNNER_TEMP/cflab-release/release-verify.log"
+
+      # 10. Also diagnose a failed/partial upload. This never permits Analytics
+      # to deploy around a failed primary verification; the job remains failed.
+      - name: Verify production revision consistency
+        id: verify_drift
+        if: always() && (steps.deploy_primary.outcome == 'success' || steps.deploy_primary.outcome == 'failure')
+        run: |
+          set -euo pipefail
+          node scripts/verify-drift.mjs \
+            2>&1 | tee "$RUNNER_TEMP/cflab-release/drift-verify.log"
+
+      # 11. Record the release even if a later step failed. The verdict and the
       # production state are derived from the step outcomes by
       # scripts/ci/release-summary.mjs (covered by test/ci), so a failed or
       # partial release can never be summarized as a success.
@@ -161,6 +189,16 @@ jobs:
           PRIMARY_VERIFY: ${{ steps.verify_primary.outcome }}
           ANALYTICS_DEPLOY: ${{ steps.deploy_analytics.outcome }}
           ANALYTICS_VERIFY: ${{ steps.verify_analytics.outcome }}
+          RELEASE_VERIFY: ${{ steps.verify_release.outcome }}
+          DRIFT_VERIFY: ${{ steps.verify_drift.outcome }}
           PRIMARY_VERSION: ${{ steps.deploy_primary.outputs.version_id }}
           ANALYTICS_VERSION: ${{ steps.deploy_analytics.outputs.version_id }}
         run: node scripts/ci/release-summary.mjs
+
+      - name: Preserve release diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: cflab-release-diagnostics
+          path: ${{ runner.temp }}/cflab-release/*.log
+          if-no-files-found: ignore

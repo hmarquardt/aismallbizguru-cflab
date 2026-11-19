@@ -10,19 +10,18 @@ name: production drift check
 # between the two Workers, or an unreported revision fails the run, because that
 # means production was changed outside the pipeline.
 #
+# Run automatically by ci.yml at release time, or manually here. No daily cron.
 # Read-only: no secrets, no deploy, no writes of any kind. See docs/CI-CD.md.
 
 on:
-  schedule:
-    # Once a day, off the hour so it does not collide with other schedules.
-    - cron: '23 11 * * *'
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: production-drift
+  # Avoid observing the intentional revision split between the two uploads.
+  group: release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:

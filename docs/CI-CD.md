@@ -113,13 +113,24 @@ The deploy job follows one fixed order, and stops at the first failure:
    entrypoint that already exists in the new CFLab version.
 8. **Analytics production verified** — health, deployment identity, dashboard
    assets, the CFLab service binding, and both collect routes.
-9. **Release recorded** — `scripts/ci/release-summary.mjs` writes a summary whose
+9. **Complete release verified** — `node scripts/verify-production.mjs --service
+   all --revision "$GITHUB_SHA"` rechecks both Workers after both uploads.
+10. **Revision consistency verified** — `node scripts/verify-drift.mjs` requires
+    matching revisions with verified ancestry in `main` (full checkout). This step
+    also runs after a failed primary upload or verification to diagnose partial
+    releases; it never bypasses the primary gate or allows Analytics to deploy
+    after that gate fails. A failure fails the deployment job.
+11. **Release recorded** — `scripts/ci/release-summary.mjs` writes a summary whose
    **verdict** (`SUCCESS`, `FAILED`, or `INCOMPLETE`) and production-state line are
    derived from the actual step outcomes, so a failed or partial release can never
    read as a success. It names which Worker is live, which is not, whether the
    revision was verified, and each Cloudflare version ID (also shown in the
    Cloudflare dashboard as the version tag). The verdict logic is covered by
-   `test/ci/release-summary.test.mjs`.
+   `test/ci/release-summary.test.mjs`. Complete-release and drift checks must
+   both succeed before the verdict can be `SUCCESS`. Deployment and verification
+   logs are retained in the `cflab-release-diagnostics` artifact, including after
+   failed or partial releases. HTTP probe failures include a Cloudflare request
+   ID when available for runtime-log correlation.
 
 One release runs at a time (`concurrency: release-<ref>`,
 `cancel-in-progress: false`), so two pushes cannot interleave deployments and an
@@ -139,10 +150,10 @@ production probes must pass before the release task can be closed.
    deployment; `success` on the overall workflow can mean validation succeeded
    while deployment was **skipped**.
 2. In a full, current checkout of `main`, run these credential-free, read-only
-   checks immediately, not at the next daily schedule:
+   checks immediately:
 
    ```sh
-   node scripts/verify-production.mjs --service all
+   node scripts/verify-production.mjs --service all --revision <released-sha>
    node scripts/verify-drift.mjs
    ```
 
@@ -173,9 +184,9 @@ production probes must pass before the release task can be closed.
    **do not wait for a routine code change to reconcile it**.
 4. After recovery, rerun both read-only commands above. Close the incident
    only when both services are healthy, both production verifications pass,
-   and their reported revisions match the approved release. The daily
-   `production drift check` is a safeguard, **not** a release-completion step
-   or a substitute for the immediate verification.
+   and their reported revisions match the approved release. Drift verification
+   now runs in the release job itself; the standalone `production drift check`
+   remains available manually. There is no daily drift schedule.
 
 The repository variable `CLOUDFLARE_DEPLOY_ENABLED` is deliberately protected.
 A disabled gate must be handled through the documented operator-controlled
@@ -195,6 +206,14 @@ correctly failed on the split. The new revision did not itself establish that
 the intermittent primary HTTP 500 issue was fixed. This example is an
 **unreconciled partial release**, not a precedent for ignoring a daily alarm.
 See [SEARCH-CONSOLE.md](SEARCH-CONSOLE.md) for the emergency deployment record.
+
+### November 19, 2026 repair
+
+The repeated HTTP 500s were traced to D1 resource exhaustion caused by the public
+Safari image query's repeated page sort, not to session credentials or bindings.
+See [the investigation and release record](PRODUCTION-INCIDENT-2026-11-19.md).
+The correction materializes the page once and requires no migration. Recovery
+still needs an approved full release; a prepared fix does not reconcile production.
 
 ## Migration safety
 
@@ -314,8 +333,9 @@ intended release is live".
   the deployed revision. These commands make no changes.
 * **Drift check:** run the `production drift check` workflow (Actions →
   `production drift check` → Run workflow), or `node scripts/verify-drift.mjs`
-  locally. It runs daily on its own and reports whether production is on a
-  revision published from `main`.
+  locally. It also runs automatically in the production release job and reports
+  whether production is on a revision published from `main`. The standalone
+  workflow has no cron schedule.
 * **Inspect the pending migration decision locally** (needs the D1 token in the
   environment; it never applies anything without `--apply`):
 
@@ -414,8 +434,8 @@ npx wrangler d1 time-travel restore ANALYTICS --config wrangler.analytics.jsonc 
 
 ## Drift detection
 
-`scripts/verify-drift.mjs` (and the scheduled, read-only
-`.github/workflows/drift.yml`) answers one question without any credential: **is
+`scripts/verify-drift.mjs` (run by the release job and the manually triggered,
+read-only `.github/workflows/drift.yml`) answers one question without any credential: **is
 production running a revision that was published from `main`?** Both Workers
 report their released revision at `GET /api/version`, so the check only reads two
 public endpoints and then compares that revision against this clone's history
@@ -433,8 +453,11 @@ public endpoints and then compares that revision against this clone's history
 Run it locally with `node scripts/verify-drift.mjs` (optionally
 `--main origin/main`, `--primary <origin>`, `--analytics <origin>`). Being behind
 is reported as information; only divergence, a split, or an unreported revision
-fails. The scheduled run has `permissions: contents: read`, uses no secrets, and
-cannot deploy or write anything.
+fails. The manual workflow has `permissions: contents: read`, uses no secrets,
+and cannot deploy or write anything. It shares the release concurrency group so
+it cannot observe the deliberate split between sequential Worker uploads. The
+redundant daily drift cron has been removed; genuine release failures remain
+failed Actions jobs with a release summary and preserved diagnostic logs.
 
 ## Rollback
 

@@ -13,7 +13,7 @@
 //
 // Inputs come from the environment so the workflow only has to pass step
 // outcomes: REVISION, VALIDATION, MIGRATION_CHECK, MIGRATION_APPLY,
-// PRIMARY_DEPLOY, PRIMARY_VERIFY, ANALYTICS_DEPLOY, ANALYTICS_VERIFY,
+// PRIMARY_DEPLOY, PRIMARY_VERIFY, ANALYTICS_DEPLOY, ANALYTICS_VERIFY, RELEASE_VERIFY, DRIFT_VERIFY,
 // PRIMARY_VERSION, ANALYTICS_VERSION.
 
 import { appendFileSync } from 'node:fs';
@@ -40,8 +40,10 @@ export function buildReleaseSummary(steps) {
   const primaryVerify = outcome(steps.primaryVerify);
   const analyticsDeploy = outcome(steps.analyticsDeploy);
   const analyticsVerify = outcome(steps.analyticsVerify);
+  const releaseVerify = outcome(steps.releaseVerify);
+  const driftVerify = outcome(steps.driftVerify);
 
-  const stages = [migrationCheck, migrationApply, primaryDeploy, primaryVerify, analyticsDeploy, analyticsVerify];
+  const stages = [validation, migrationCheck, migrationApply, primaryDeploy, primaryVerify, analyticsDeploy, analyticsVerify, releaseVerify, driftVerify];
   const failed = stages.filter(stage => stage === 'failure');
   const incomplete = stages.filter(stage => stage === 'skipped' || stage === 'cancelled' || stage === 'unknown');
   const verdict = failed.length ? 'FAILED' : incomplete.length ? 'INCOMPLETE' : 'SUCCESS';
@@ -49,15 +51,21 @@ export function buildReleaseSummary(steps) {
   // What production is actually running now, derived only from what succeeded.
   let productionState;
   if (!isSuccess(primaryDeploy) && !isSuccess(analyticsDeploy)) {
-    productionState = 'Neither Worker was published by this run; production is unchanged.';
-  } else if (isSuccess(primaryDeploy) && isSuccess(analyticsDeploy) && isSuccess(primaryVerify) && isSuccess(analyticsVerify)) {
+    productionState = primaryDeploy === 'skipped' && analyticsDeploy === 'skipped'
+      ? 'Neither Worker was published by this run; Worker revisions are unchanged.'
+      : 'AT RISK: no successful Worker publication was reported. A failed or cancelled command may have published before stopping; inspect drift diagnostics and both /api/version endpoints.';
+  } else if (verdict === 'SUCCESS') {
     productionState = 'Both Workers were published and verified at the released revision.';
   } else if (isSuccess(primaryDeploy) && !isSuccess(analyticsDeploy)) {
-    productionState = 'PARTIALLY UPDATED: the primary Worker was published, the Analytics Worker was not. The two Workers are on different revisions until this is resolved.';
+    productionState = analyticsDeploy === 'skipped'
+      ? 'PARTIALLY UPDATED: the primary Worker was published, the Analytics Worker was not. Check the actual revisions in the drift diagnostics and complete a verified release.'
+      : 'AT RISK: the primary Worker was published; Analytics publication did not report success. Inspect drift diagnostics and live revisions; its failed command may have published before stopping.';
   } else if (isSuccess(primaryDeploy) && !isSuccess(primaryVerify)) {
     productionState = 'AT RISK: the primary Worker was published but its production verification did not pass. Production may be broken; decide on a rollback (docs/CI-CD.md#rollback).';
   } else if (isSuccess(primaryDeploy) && isSuccess(analyticsDeploy) && !(isSuccess(primaryVerify) && isSuccess(analyticsVerify))) {
     productionState = 'AT RISK: both Workers were published but production verification did not pass for both. Decide on a rollback (docs/CI-CD.md#rollback).';
+  } else if (isSuccess(primaryDeploy) && isSuccess(analyticsDeploy)) {
+    productionState = 'AT RISK: both Workers were published, but complete-release or drift verification did not pass. Inspect the verification logs and both /api/version endpoints; follow docs/CI-CD.md#interrupted-releases-and-release-sign-off.';
   } else {
     productionState = 'Review the stage outcomes below: production state is not fully determined.';
   }
@@ -78,13 +86,15 @@ export function buildReleaseSummary(steps) {
     `| primary Worker verification | ${primaryVerify} |`,
     `| Analytics Worker deploy | ${analyticsDeploy}${steps.analyticsVersion ? ` (\`${steps.analyticsVersion}\`)` : ''} |`,
     `| Analytics Worker verification | ${analyticsVerify} |`,
+    `| complete production verification | ${releaseVerify} |`,
+    `| production drift verification | ${driftVerify} |`,
     '',
   ];
 
   if (verdict === 'SUCCESS') {
     lines.push('Both Workers report the released revision at `GET /api/version`; rollback and recovery commands are in docs/CI-CD.md.');
   } else {
-    lines.push('This run did **not** complete a verified release. Do not treat production as updated: check the state above, then use docs/CI-CD.md (rollback, D1 recovery, emergency deployment) before the next attempt.');
+    lines.push('This run did **not** complete a verified release. Inspect the failed steps and the `cflab-release-diagnostics` artifact for probe errors and actual revisions. Follow docs/CI-CD.md#interrupted-releases-and-release-sign-off before the next attempt; do not deploy a single Worker around a failed gate.');
   }
 
   return { verdict, productionState, markdown: `${lines.join('\n')}\n` };
@@ -104,6 +114,8 @@ function fromEnvironment(env) {
     primaryVerify: read('PRIMARY_VERIFY'),
     analyticsDeploy: read('ANALYTICS_DEPLOY'),
     analyticsVerify: read('ANALYTICS_VERIFY'),
+    releaseVerify: read('RELEASE_VERIFY'),
+    driftVerify: read('DRIFT_VERIFY'),
     primaryVersion: read('PRIMARY_VERSION'),
     analyticsVersion: read('ANALYTICS_VERSION'),
   };

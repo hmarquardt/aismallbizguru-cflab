@@ -4,6 +4,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import local from '../src/local';
 import production from '../src/index';
 import type { Bindings } from '../src/types';
+import { SAFARI_PAGE_FILES_SQL } from '../src/routes/public-safari';
 
 const bindings = env as unknown as Bindings & { TEST_MIGRATIONS: { name: string; queries: string[] }[] };
 const testEnv = { ...bindings, PROXY_ALLOWED_HOSTS: 'api.open-meteo.com' } as unknown as Bindings;
@@ -376,6 +377,20 @@ describe('public Safari CORS', () => {
 
 
 describe('public Safari pagination and dataset growth', () => {
+  it('keeps D1 overload a server failure and logs only a safe dependency classification', async () => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const failing = { ...bindings, DB: {
+      prepare: () => { throw new Error('D1_ERROR: D1 DB is overloaded. Too many resources consumed within a 10 second window. sensitive-sql-or-token'); },
+    } } as unknown as Bindings;
+    const response = await production.fetch(new Request('https://cflab.aismallbizguru.com/api/bitcoin-signals/radar', {
+      headers: { Authorization: `Bearer cflu_${'0'.repeat(64)}` },
+    }), failing);
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({ error: { code: 'internal_error', message: 'Internal server error' } });
+    expect(logged).toHaveBeenCalledWith(JSON.stringify({ event: 'internal_error', dependency: 'd1', reason: 'overloaded' }));
+    expect(JSON.stringify(logged.mock.calls)).not.toContain('sensitive-sql-or-token');
+  });
+
   async function insertBulk(count: number) {
     const base = 1700000000000;
     for (let start = 0; start < count; start += 100) {
@@ -390,6 +405,27 @@ describe('public Safari pagination and dataset growth', () => {
       await bindings.DB.batch(statements);
     }
   }
+
+  it('builds the image page once instead of sorting observations for every file', async () => {
+    await insertBulk(100);
+    for (let i = 0; i < 30; i++) {
+      await putFile(crypto.randomUUID(), `regression-${i}`, 'image', 'image/jpeg');
+    }
+    const args = ['wildlife-field-recorder', 'observations', 1, 0, 'wildlife-field-recorder'];
+    const fixed = await bindings.DB.prepare(SAFARI_PAGE_FILES_SQL).bind(...args).all();
+    // Reproduce the incident's query on the same small fixture. Compare actual
+    // rows read, not timing, so this guards work growth without a flaky clock.
+    const previous = await bindings.DB.prepare(SAFARI_PAGE_FILES_SQL.replace('AS MATERIALIZED', 'AS'))
+      .bind(...args).all();
+    expect(fixed.results).toEqual(previous.results);
+    expect(fixed.meta.rows_read).toBeLessThan(previous.meta.rows_read / 5);
+    const page = await publicObservations('?limit=1');
+    expect(page.response.status).toBe(200);
+    expect(page.body.observations[0]?.id).toBe(obsB);
+    expect((await production.fetch(new Request('https://cflab.aismallbizguru.com/api/bitcoin-signals/radar', {
+      headers: { Authorization: `Bearer cflu_${'0'.repeat(64)}` },
+    }), bindings)).status).toBe(401);
+  });
 
   it('paginates deterministically without repeating or dropping records', async () => {
     await insertBulk(25);

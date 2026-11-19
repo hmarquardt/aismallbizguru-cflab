@@ -11,7 +11,7 @@ name: production backups
 
 on:
   schedule:
-    # Daily, after the drift check, and offset from the hour.
+    # Daily, offset from the hour.
     - cron: '37 3 * * *'
   workflow_dispatch:
 

@@ -28,6 +28,18 @@ export const PUBLIC_PAGE_SIZE_DEFAULT = 500;
 export const PUBLIC_PAGE_SIZE_MAX = 1000;
 const PUBLIC_OFFSET_MAX = 100_000_000;
 
+// Materialize once: a co-routine can rerun the JSON sort for every file in the
+// outer join, exhausting D1's resource window and breaking unrelated auth reads.
+export const SAFARI_PAGE_FILES_SQL = `WITH page AS MATERIALIZED (
+  SELECT id FROM records
+  WHERE app_id = ? AND resource = ? AND deleted_at IS NULL
+  ORDER BY COALESCE(json_extract(data_json, '$.createdAt'), 0) DESC, id ASC
+  LIMIT ? OFFSET ?
+)
+SELECT f.id, f.record_id, f.content_type
+FROM files f JOIN page ON page.id = f.record_id
+WHERE f.app_id = ? AND f.content_type LIKE 'image/%'`;
+
 interface RecordRow { id: string; data_json: string }
 interface FileRow { id: string; record_id: string; content_type: string }
 
@@ -158,17 +170,8 @@ publicSafari.get('/observations', async c => {
     // Select the page's image files with the same bounded page subquery instead
     // of a dynamic IN list: D1 rejects statements with too many bound
     // parameters, which a large page would otherwise hit.
-    const { results: files } = await c.env.DB.prepare(
-      `WITH page AS (
-         SELECT id FROM records
-         WHERE app_id = ? AND resource = ? AND deleted_at IS NULL
-         ORDER BY COALESCE(json_extract(data_json, '$.createdAt'), 0) DESC, id ASC
-         LIMIT ? OFFSET ?
-       )
-       SELECT f.id, f.record_id, f.content_type
-       FROM files f JOIN page ON page.id = f.record_id
-       WHERE f.app_id = ? AND f.content_type LIKE 'image/%'`,
-    ).bind(SAFARI_APP_ID, SAFARI_RESOURCE, limit, offset, SAFARI_APP_ID).all<FileRow>();
+    const { results: files } = await c.env.DB.prepare(SAFARI_PAGE_FILES_SQL)
+      .bind(SAFARI_APP_ID, SAFARI_RESOURCE, limit, offset, SAFARI_APP_ID).all<FileRow>();
     for (const file of files) {
       const list = filesByRecord.get(file.record_id) ?? [];
       list.push(file);

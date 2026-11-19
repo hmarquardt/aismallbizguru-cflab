@@ -14,7 +14,7 @@
 //      simply means a release is pending — while *divergence* is a failure.
 //
 // The ancestry check uses the local clone, so run it from a full clone of `main`
-// (the scheduled workflow checks out with `fetch-depth: 0`).
+// (the release and manual workflows check out with `fetch-depth: 0`).
 //
 // Usage: node scripts/verify-drift.mjs [--primary <origin>] [--analytics <origin>]
 //                                      [--main <git-ref>]

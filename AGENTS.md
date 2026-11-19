@@ -71,7 +71,7 @@ complete only when both Workers report the same intended commit from `main`
   partial-release incident in the same task.** Capture the deployed revisions,
   failed step and exact error; investigate the underlying production failure;
   and reconcile both Workers through the existing, gated, fully validated
-  release pipeline once safe. Never assume another push or tomorrow's scheduled
+  release pipeline once safe. Never assume another push or a later manual
   drift check will repair it.
 * **HTTP 500 or inconsistent security/health probes are production failures, not
   permission to skip checks.** Diagnose and correct the cause; do not relax

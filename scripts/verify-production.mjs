@@ -218,7 +218,9 @@ async function runCheck(check, fetchImpl) {
   if (response.status >= 300 && response.status < 400) {
     throw new VerificationError('redirect', `${check.name}: expected a direct response, received HTTP ${response.status} to ${response.headers.get('location') ?? 'an unspecified location'}`);
   }
-  assert(response.status === check.status, 'status', `${check.name}: expected HTTP ${check.status}, received ${response.status}`);
+  const ray = response.headers.get('cf-ray');
+  const diagnostic = ray && /^[a-zA-Z0-9-]{1,80}$/.test(ray) ? ` (CF-Ray: ${ray})` : '';
+  assert(response.status === check.status, 'status', `${check.name}: expected HTTP ${check.status}, received ${response.status}${diagnostic}`);
   assert(bytes.length <= MAX_BODY_BYTES, 'body', `${check.name}: response exceeds the ${MAX_BODY_BYTES}-byte read limit`);
   const text = new TextDecoder().decode(bytes);
   const contentType = response.headers.get('content-type') ?? '';

@@ -45,6 +45,16 @@ test('a completely unreachable deployment fails every check as a network failure
 test('an unexpected status code is reported as a status failure, not a network failure', rejectsWithCategory(
   fetchAnsweringVersion(() => new Response('unavailable', { status: 500 })), 'status'));
 
+test('HTTP failures include a Cloudflare request id for runtime correlation without copying the body', async () => {
+  await assert.rejects(verifyPrimary(fetchAnsweringVersion(() => new Response('private upstream details', {
+    status: 500, headers: { 'cf-ray': 'a5d2578edd00ecd4-CMH' },
+  }))), error => {
+    assert.match(error.message, /CF-Ray: a5d2578edd00ecd4-CMH/);
+    assert.doesNotMatch(error.message, /private upstream details/);
+    return true;
+  });
+});
+
 test('a redirect is reported as a redirect failure', rejectsWithCategory(
   fetchAnsweringVersion(() => new Response('', { status: 302, headers: { location: 'https://example.com/' } })), 'redirect'));
 
